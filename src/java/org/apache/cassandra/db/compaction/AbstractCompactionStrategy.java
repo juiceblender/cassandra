@@ -115,8 +115,6 @@ public abstract class AbstractCompactionStrategy
             uncheckedTombstoneCompaction = optionValue == null ? DEFAULT_UNCHECKED_TOMBSTONE_COMPACTION_OPTION : Boolean.parseBoolean(optionValue);
             optionValue = options.get(LOG_ALL_OPTION);
             logAll = optionValue == null ? DEFAULT_LOG_ALL_OPTION : Boolean.parseBoolean(optionValue);
-            if (!shouldBeEnabled())
-                this.disable();
         }
         catch (ConfigurationException e)
         {
@@ -212,14 +210,6 @@ public abstract class AbstractCompactionStrategy
      * @return size in bytes of the largest sstables for this strategy
      */
     public abstract long getMaxSSTableBytes();
-
-    public void enable()
-    {
-    }
-
-    public void disable()
-    {
-    }
 
     /**
      * @return whether or not MeteredFlusher should be able to trigger memtable flushes for this CF.
@@ -539,14 +529,6 @@ public abstract class AbstractCompactionStrategy
         uncheckedOptions.remove(CompactionParams.Option.PROVIDE_OVERLAPPING_TOMBSTONES.toString());
         return uncheckedOptions;
     }
-
-    public boolean shouldBeEnabled()
-    {
-        String optionValue = options.get(COMPACTION_ENABLED);
-
-        return optionValue == null || Boolean.parseBoolean(optionValue);
-    }
-
 
     /**
      * Method for grouping similar SSTables together, This will be used by

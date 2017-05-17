@@ -183,16 +183,6 @@ class PendingRepairManager
         strategies.values().forEach(AbstractCompactionStrategy::shutdown);
     }
 
-    synchronized void enable()
-    {
-        strategies.values().forEach(AbstractCompactionStrategy::enable);
-    }
-
-    synchronized void disable()
-    {
-        strategies.values().forEach(AbstractCompactionStrategy::disable);
-    }
-
     private int getEstimatedRemainingTasks(UUID sessionID, AbstractCompactionStrategy strategy)
     {
         if (canCleanup(sessionID))

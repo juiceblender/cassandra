@@ -691,13 +691,6 @@ public class CompactionStrategyManager implements INotificationConsumer
         writeLock.lock();
         try
         {
-            if (repaired != null)
-                repaired.forEach(AbstractCompactionStrategy::enable);
-            if (unrepaired != null)
-                unrepaired.forEach(AbstractCompactionStrategy::enable);
-            if (pendingRepairs != null)
-                pendingRepairs.forEach(PendingRepairManager::enable);
-            // enable this last to make sure the strategies are ready to get calls.
             enabled = true;
         }
         finally
@@ -711,14 +704,7 @@ public class CompactionStrategyManager implements INotificationConsumer
         writeLock.lock();
         try
         {
-            // disable this first avoid asking disabled strategies for compaction tasks
             enabled = false;
-            if (repaired != null)
-                repaired.forEach(AbstractCompactionStrategy::disable);
-            if (unrepaired != null)
-                unrepaired.forEach(AbstractCompactionStrategy::disable);
-            if (pendingRepairs != null)
-                pendingRepairs.forEach(PendingRepairManager::disable);
         }
         finally
         {
