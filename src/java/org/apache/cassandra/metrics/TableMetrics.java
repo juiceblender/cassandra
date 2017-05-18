@@ -22,6 +22,7 @@ import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.TimeUnit;
+import java.util.stream.Collectors;
 
 import com.google.common.collect.Maps;
 
@@ -205,7 +206,7 @@ public class TableMetrics
     /**
      * stores metrics that will be rolled into a single global metric
      */
-    public final static ConcurrentMap<String, Set<Metric>> allTableMetrics = Maps.newConcurrentMap();
+    public final static ConcurrentMap<CassandraMetricsRegistry.MetricName, Metric> newAllTableMetrics = Maps.newConcurrentMap();
 
     /**
      * Stores all metric names created that can be used when unregistering, optionally mapped to an alias name.
@@ -440,12 +441,9 @@ public class TableMetrics
         {
             public Long getValue()
             {
-                long min = Long.MAX_VALUE;
-                for (Metric cfGauge : allTableMetrics.get("MinPartitionSize"))
-                {
-                    min = Math.min(min, ((Gauge<? extends Number>) cfGauge).getValue().longValue());
-                }
-                return min;
+                return ((Gauge<? extends Number>) newAllTableMetrics.entrySet().stream()
+                                                                    .filter(k -> k.getKey().getName().equals("MinPartitionSize"))
+                                                                    .min(Comparator.comparingLong(e -> ((Gauge<? extends Number>) e.getValue()).getValue().longValue())).get().getValue()).getValue().longValue();
             }
         });
         maxPartitionSize = createTableGauge("MaxPartitionSize", "MaxRowSize", new Gauge<Long>()
@@ -464,12 +462,9 @@ public class TableMetrics
         {
             public Long getValue()
             {
-                long max = 0;
-                for (Metric cfGauge : allTableMetrics.get("MaxPartitionSize"))
-                {
-                    max = Math.max(max, ((Gauge<? extends Number>) cfGauge).getValue().longValue());
-                }
-                return max;
+                return ((Gauge<? extends Number>) newAllTableMetrics.entrySet().stream()
+                                                                    .filter(k -> k.getKey().getName().equals("MaxPartitionSize"))
+                                                                    .max(Comparator.comparingLong(e -> ((Gauge<? extends Number>) e.getValue()).getValue().longValue())).get().getValue()).getValue().longValue();
             }
         });
         meanPartitionSize = createTableGauge("MeanPartitionSize", "MeanRowSize", new Gauge<Long>()
@@ -710,7 +705,7 @@ public class TableMetrics
         {
             CassandraMetricsRegistry.MetricName name = factory.createMetricName(entry.getKey());
             CassandraMetricsRegistry.MetricName alias = aliasFactory.createMetricName(entry.getValue());
-            allTableMetrics.get(entry.getKey()).remove(Metrics.getMetrics().get(name.getMetricName()));
+            newAllTableMetrics.remove(name);
             Metrics.remove(name, alias);
         }
         readLatency.release();
@@ -736,12 +731,9 @@ public class TableMetrics
         {
             public Long getValue()
             {
-                long total = 0;
-                for (Metric cfGauge : allTableMetrics.get(name))
-                {
-                    total = total + ((Gauge<? extends Number>) cfGauge).getValue().longValue();
-                }
-                return total;
+                return newAllTableMetrics.entrySet().stream()
+                                         .filter(k -> k.getKey().getName().equals(name))
+                                         .mapToLong(e -> ((Gauge<? extends Number>) e.getValue()).getValue().longValue()).sum();
             }
         });
     }
@@ -785,12 +777,9 @@ public class TableMetrics
             {
                 public Long getValue()
                 {
-                    long total = 0;
-                    for (Metric cfGauge : allTableMetrics.get(name))
-                    {
-                        total += ((Counter) cfGauge).getCount();
-                    }
-                    return total;
+                   return newAllTableMetrics.entrySet().stream()
+                                            .filter(k -> k.getKey().getName().equals(name))
+                                            .mapToLong(e -> ((Counter) e.getValue()).getCount()).sum();
                 }
             });
         }
@@ -864,8 +853,7 @@ public class TableMetrics
      */
     private boolean register(String name, String alias, Metric metric)
     {
-        boolean ret = allTableMetrics.putIfAbsent(name, ConcurrentHashMap.newKeySet()) == null;
-        allTableMetrics.get(name).add(metric);
+        boolean ret = newAllTableMetrics.putIfAbsent(factory.createMetricName(name), metric) == null;
         all.put(name, alias);
         return ret;
     }
