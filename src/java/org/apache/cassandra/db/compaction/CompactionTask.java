@@ -33,6 +33,7 @@ import com.google.common.util.concurrent.RateLimiter;
 import org.apache.cassandra.db.Directories;
 import org.apache.cassandra.db.compaction.writers.CompactionAwareWriter;
 import org.apache.cassandra.db.compaction.writers.DefaultCompactionWriter;
+import org.apache.cassandra.io.sstable.SSTable;
 import org.apache.cassandra.io.sstable.format.SSTableReader;
 import org.apache.commons.lang3.StringUtils;
 import org.slf4j.Logger;
@@ -86,18 +87,18 @@ public class CompactionTask extends AbstractCompactionTask
         return transaction.originals().size();
     }
 
-    public boolean reduceScopeForLimitedSpace(long expectedSize)
+    public boolean reduceScopeForLimitedSpace(final Set<SSTableReader> nonExpiredSSTables, final long expectedSize)
     {
-        if (partialCompactionsAcceptable() && transaction.originals().size() > 1)
+        if (partialCompactionsAcceptable() && nonExpiredSSTables.size() > 1)
         {
             // Try again w/o the largest one.
             logger.warn("insufficient space to compact all requested files. {}MB required, {}",
                         (float) expectedSize / 1024 / 1024,
-                        StringUtils.join(transaction.originals(), ", "));
+                        StringUtils.join(nonExpiredSSTables, ", "));
 
             // Note that we have removed files that are still marked as compacting.
             // This suboptimal but ok since the caller will unmark all the sstables at the end.
-            SSTableReader removedSSTable = cfs.getMaxSizeFile(transaction.originals());
+            SSTableReader removedSSTable = cfs.getMaxSizeFile(nonExpiredSSTables);
             transaction.cancel(removedSSTable);
             return true;
         }
@@ -125,44 +126,49 @@ public class CompactionTask extends AbstractCompactionTask
         if (DatabaseDescriptor.isSnapshotBeforeCompaction())
             cfs.snapshotWithoutFlush(System.currentTimeMillis() + "-compact-" + cfs.name);
 
-        // note that we need to do a rough estimate early if we can fit the compaction on disk - this is pessimistic, but
-        // since we might remove sstables from the compaction in checkAvailableDiskSpace it needs to be done here
-
-        checkAvailableDiskSpace();
-
-        // sanity check: all sstables must belong to the same cfs
-        assert !Iterables.any(transaction.originals(), new Predicate<SSTableReader>()
-        {
-            @Override
-            public boolean apply(SSTableReader sstable)
-            {
-                return !sstable.descriptor.cfname.equals(cfs.name);
-            }
-        });
-
-        UUID taskId = transaction.opId();
-
-        // new sstables from flush can be added during a compaction, but only the compaction can remove them,
-        // so in our single-threaded compaction world this is a valid way of determining if we're compacting
-        // all the sstables (that existed when we started)
-        StringBuilder ssTableLoggerMsg = new StringBuilder("[");
-        for (SSTableReader sstr : transaction.originals())
-        {
-            ssTableLoggerMsg.append(String.format("%s:level=%d, ", sstr.getFilename(), sstr.getSSTableLevel()));
-        }
-        ssTableLoggerMsg.append("]");
-
-        logger.debug("Compacting ({}) {}", taskId, ssTableLoggerMsg);
-
-        RateLimiter limiter = CompactionManager.instance.getRateLimiter();
-        long start = System.nanoTime();
-        long startTime = System.currentTimeMillis();
-        long totalKeysWritten = 0;
-        long estimatedKeys = 0;
-        long inputSizeBytes;
         try (CompactionController controller = getCompactionController(transaction.originals()))
         {
-            Set<SSTableReader> actuallyCompact = Sets.difference(transaction.originals(), controller.getFullyExpiredSSTables());
+            final Set<SSTableReader> fullyExpiredSSTables = controller.getFullyExpiredSSTables();
+            final Set<SSTableReader> actuallyCompact = Sets.difference(transaction.originals(), fullyExpiredSSTables);
+
+            // note that we need to do a rough estimate early if we can fit the compaction on disk - this is pessimistic, but
+            // since we might remove sstables from the compaction in checkAvailableDiskSpace it needs to be done here
+            // If there are no fully expired SSTables, check available disk space. Otherwise, we want to try and always compact
+            // fully expired SSTables
+            if (fullyExpiredSSTables.isEmpty())
+                checkAvailableDiskSpace(actuallyCompact);
+
+            // sanity check: all sstables must belong to the same cfs
+            assert !Iterables.any(transaction.originals(), new Predicate<SSTableReader>()
+            {
+                @Override
+                public boolean apply(SSTableReader sstable)
+                {
+                    return !sstable.descriptor.cfname.equals(cfs.name);
+                }
+            });
+
+            UUID taskId = transaction.opId();
+
+            // new sstables from flush can be added during a compaction, but only the compaction can remove them,
+            // so in our single-threaded compaction world this is a valid way of determining if we're compacting
+            // all the sstables (that existed when we started)
+            StringBuilder ssTableLoggerMsg = new StringBuilder("[");
+            for (SSTableReader sstr : transaction.originals())
+            {
+                ssTableLoggerMsg.append(String.format("%s:level=%d, ", sstr.getFilename(), sstr.getSSTableLevel()));
+            }
+            ssTableLoggerMsg.append("]");
+
+            logger.debug("Compacting ({}) {}", taskId, ssTableLoggerMsg);
+
+            RateLimiter limiter = CompactionManager.instance.getRateLimiter();
+            long start = System.nanoTime();
+            long startTime = System.currentTimeMillis();
+            long totalKeysWritten = 0;
+            long estimatedKeys = 0;
+            long inputSizeBytes;
+
             Collection<SSTableReader> newSStables;
 
             long[] mergedRowCounts;
@@ -339,8 +345,10 @@ public class CompactionTask extends AbstractCompactionTask
     Checks if we have enough disk space to execute the compaction.  Drops the largest sstable out of the Task until
     there's enough space (in theory) to handle the compaction.  Does not take into account space that will be taken by
     other compactions.
+
+    Mutates the set nonExpiredSSTables by removing all SSTables that are too big for compaction.
      */
-    protected void checkAvailableDiskSpace()
+    protected void checkAvailableDiskSpace(final Set<SSTableReader> nonExpiredSSTables)
     {
         if(!cfs.isCompactionDiskSpaceCheckEnabled() && compactionType == OperationType.COMPACTION)
         {
@@ -352,7 +360,7 @@ public class CompactionTask extends AbstractCompactionTask
         int sstablesRemoved = 0;
         while(true)
         {
-            long expectedWriteSize = cfs.getExpectedCompactedFileSize(transaction.originals(), compactionType);
+            long expectedWriteSize = cfs.getExpectedCompactedFileSize(nonExpiredSSTables, compactionType);
             long estimatedSSTables = Math.max(1, expectedWriteSize / strategy.getMaxSSTableBytes());
 
             if(cfs.getDirectories().hasAvailableDiskSpace(estimatedSSTables, expectedWriteSize))
@@ -367,7 +375,7 @@ public class CompactionTask extends AbstractCompactionTask
                 break;
             }
 
-            if (!reduceScopeForLimitedSpace(expectedWriteSize))
+            if (!reduceScopeForLimitedSpace(nonExpiredSSTables, expectedWriteSize))
             {
                 // we end up here if we can't take any more sstables out of the compaction.
                 // usually means we've run out of disk space
@@ -379,7 +387,7 @@ public class CompactionTask extends AbstractCompactionTask
             }
             sstablesRemoved++;
             logger.warn("Not enough space for compaction, {}MB estimated.  Reducing scope.",
-                            (float) expectedWriteSize / 1024 / 1024);
+                        (float) expectedWriteSize / 1024 / 1024);
         }
     }
 
