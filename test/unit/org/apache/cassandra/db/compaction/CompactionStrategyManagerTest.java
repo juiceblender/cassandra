@@ -93,7 +93,7 @@ public class CompactionStrategyManagerTest
         SchemaLoader.createKeyspace(KS_PREFIX,
                                     KeyspaceParams.simple(1),
                                     SchemaLoader.standardCFMD(KS_PREFIX, TABLE_PREFIX)
-                                                .compaction(CompactionParams.scts(Collections.emptyMap())));
+                                                .compaction(CompactionParams.stcs(Collections.emptyMap())));
         ColumnFamilyStore cfs = Keyspace.open(KS_PREFIX).getColumnFamilyStore(TABLE_PREFIX);
         cfs.disableAutoCompaction();
         Set<SSTableReader> previousSSTables = cfs.getLiveSSTables();

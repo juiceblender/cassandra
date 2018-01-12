@@ -28,36 +28,43 @@ import java.util.UUID;
 import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.Iterables;
 import com.google.common.collect.Lists;
+import org.junit.After;
 import org.junit.Assert;
 import org.junit.BeforeClass;
-import org.junit.After;
-import org.junit.Ignore;
 import org.junit.Test;
 
 import org.apache.cassandra.locator.InetAddressAndPort;
 import org.apache.cassandra.schema.Schema;
 import org.apache.cassandra.schema.TableMetadata;
-import org.apache.cassandra.db.*;
+import org.apache.cassandra.SchemaLoader;
+import org.apache.cassandra.UpdateBuilder;
+import org.apache.cassandra.db.ColumnFamilyStore;
+import org.apache.cassandra.db.Keyspace;
+import org.apache.cassandra.db.RowUpdateBuilder;
+import org.apache.cassandra.db.SerializationHeader;
 import org.apache.cassandra.db.lifecycle.LifecycleTransaction;
-import org.apache.cassandra.db.rows.EncodingStats;
 import org.apache.cassandra.db.lifecycle.SSTableSet;
+import org.apache.cassandra.db.rows.EncodingStats;
 import org.apache.cassandra.db.rows.UnfilteredRowIterator;
 import org.apache.cassandra.dht.ByteOrderedPartitioner.BytesToken;
 import org.apache.cassandra.dht.Range;
 import org.apache.cassandra.dht.Token;
 import org.apache.cassandra.exceptions.ConfigurationException;
-import org.apache.cassandra.io.sstable.*;
+import org.apache.cassandra.io.sstable.Descriptor;
+import org.apache.cassandra.io.sstable.ISSTableScanner;
+import org.apache.cassandra.io.sstable.SSTableTxnWriter;
 import org.apache.cassandra.io.sstable.format.SSTableReader;
 import org.apache.cassandra.schema.KeyspaceParams;
+import org.apache.cassandra.schema.Schema;
+import org.apache.cassandra.schema.TableMetadata;
 import org.apache.cassandra.service.ActiveRepairService;
-import org.apache.cassandra.SchemaLoader;
 import org.apache.cassandra.streaming.PreviewKind;
 import org.apache.cassandra.utils.ByteBufferUtil;
 import org.apache.cassandra.utils.UUIDGen;
 import org.apache.cassandra.utils.concurrent.Refs;
-import org.apache.cassandra.UpdateBuilder;
 import org.apache.cassandra.utils.concurrent.Transactional;
 
+import static org.apache.cassandra.service.ActiveRepairService.NO_PENDING_REPAIR;
 import static org.apache.cassandra.service.ActiveRepairService.UNREPAIRED_SSTABLE;
 import static org.hamcrest.CoreMatchers.is;
 import static org.junit.Assert.assertEquals;
@@ -65,8 +72,6 @@ import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertThat;
 import static org.junit.Assert.assertTrue;
-
-import static org.apache.cassandra.service.ActiveRepairService.NO_PENDING_REPAIR;
 
 
 public class AntiCompactionTest
@@ -170,7 +175,6 @@ public class AntiCompactionTest
         antiCompactOne(UNREPAIRED_SSTABLE, UUIDGen.getTimeUUID());
     }
 
-    @Ignore
     @Test
     public void antiCompactionSizeTest() throws InterruptedException, IOException
     {
@@ -180,12 +184,14 @@ public class AntiCompactionTest
         SSTableReader s = writeFile(cfs, 1000);
         cfs.addSSTable(s);
         Range<Token> range = new Range<Token>(new BytesToken(ByteBufferUtil.bytes(0)), new BytesToken(ByteBufferUtil.bytes(500)));
+        List<Range<Token>> ranges = Arrays.asList(range);
         Collection<SSTableReader> sstables = cfs.getLiveSSTables();
         UUID parentRepairSession = UUID.randomUUID();
+        registerParentRepairSession(parentRepairSession, ranges, UNREPAIRED_SSTABLE, UUIDGen.getTimeUUID());
         try (LifecycleTransaction txn = cfs.getTracker().tryModify(sstables, OperationType.ANTICOMPACTION);
              Refs<SSTableReader> refs = Refs.ref(sstables))
         {
-            CompactionManager.instance.performAnticompaction(cfs, Arrays.asList(range), refs, txn, 12345, NO_PENDING_REPAIR, parentRepairSession);
+            CompactionManager.instance.performAnticompaction(cfs, ranges, refs, txn, 12345, NO_PENDING_REPAIR, parentRepairSession);
         }
         long sum = 0;
         long rows = 0;
@@ -235,18 +241,7 @@ public class AntiCompactionTest
     }
 
     @Test
-    public void antiCompactTenSTC() throws InterruptedException, IOException
-    {
-        antiCompactTen("SizeTieredCompactionStrategy");
-    }
-
-    @Test
-    public void antiCompactTenLC() throws InterruptedException, IOException
-    {
-        antiCompactTen("LeveledCompactionStrategy");
-    }
-
-    public void antiCompactTen(String compactionStrategy) throws InterruptedException, IOException
+    public void antiCompactTen() throws InterruptedException, IOException
     {
         Keyspace keyspace = Keyspace.open(KEYSPACE1);
         ColumnFamilyStore store = keyspace.getColumnFamilyStore(CF);
