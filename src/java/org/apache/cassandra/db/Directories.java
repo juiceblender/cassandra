@@ -31,6 +31,7 @@ import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.Iterables;
 import com.google.common.collect.Maps;
 
+import org.apache.commons.lang3.ArrayUtils;
 import org.apache.commons.lang3.StringUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -90,13 +91,27 @@ public class Directories
     public static final String SECONDARY_INDEX_NAME_SEPARATOR = ".";
 
     public static final DataDirectory[] dataDirectories;
+    public static final DataDirectory[] standardDataDirectories;
+    public static final DataDirectory[] archiveDataDirectories;
 
     static
     {
-        String[] locations = DatabaseDescriptor.getAllDataFileLocations();
-        dataDirectories = new DataDirectory[locations.length];
-        for (int i = 0; i < locations.length; ++i)
-            dataDirectories[i] = new DataDirectory(new File(locations[i]));
+        final String[] archiveDataDirectoryLocations = DatabaseDescriptor.getAllArchiveDataFileLocations();
+        if (archiveDataDirectoryLocations != null)
+        {
+            archiveDataDirectories = new DataDirectory[archiveDataDirectoryLocations.length];
+            for (int i = 0; i < archiveDataDirectoryLocations.length; ++i)
+                archiveDataDirectories[i] = new DataDirectory(new File(archiveDataDirectoryLocations[i]));
+        } else {
+            archiveDataDirectories = new DataDirectory[0];
+        }
+
+        final String[] standardDataDirectoryLocations = DatabaseDescriptor.getAllStandardDataFileLocations();
+        standardDataDirectories = new DataDirectory[standardDataDirectoryLocations.length];
+        for (int i = 0; i < standardDataDirectoryLocations.length; ++i)
+            standardDataDirectories[i] = new DataDirectory(new File(standardDataDirectoryLocations[i]));
+
+        dataDirectories = ArrayUtils.addAll(standardDataDirectories, archiveDataDirectories);
     }
 
     /**
@@ -361,20 +376,32 @@ public class Directories
     }
 
     /**
+     * Returns a non-blacklisted, non archive data directory that _currently_ has {@code writeSize} bytes as usable space, null if
+     * there is not enough space left in all directories.
+     *
+     * @throws FSWriteError if all directories are blacklisted.
+     */
+    public DataDirectory getWriteableLocation(long writeSize) {
+        return getWriteableLocation(writeSize, false);
+    }
+
+    /**
      * Returns a non-blacklisted data directory that _currently_ has {@code writeSize} bytes as usable space, null if
      * there is not enough space left in all directories.
      *
      * @throws FSWriteError if all directories are blacklisted.
      */
-    public DataDirectory getWriteableLocation(long writeSize)
+    public DataDirectory getWriteableLocation(long writeSize, boolean useArchivingDirectory)
     {
         List<DataDirectoryCandidate> candidates = new ArrayList<>();
 
         long totalAvailable = 0L;
 
+        DataDirectory[] dataDirectories = useArchivingDirectory ? archiveDataDirectories : standardDataDirectories;
+
         // pick directories with enough space and so that resulting sstable dirs aren't blacklisted for writes.
         boolean tooBig = false;
-        for (DataDirectory dataDir : paths)
+        for (DataDirectory dataDir : dataDirectories)
         {
             if (BlacklistedDirectories.isUnwritable(getLocationForDisk(dataDir)))
             {
@@ -462,14 +489,7 @@ public class Directories
                 nonBlacklistedDirs.add(dir);
         }
 
-        Collections.sort(nonBlacklistedDirs, new Comparator<DataDirectory>()
-        {
-            @Override
-            public int compare(DataDirectory o1, DataDirectory o2)
-            {
-                return o1.location.compareTo(o2.location);
-            }
-        });
+        Collections.sort(nonBlacklistedDirs, Comparator.comparing(o -> o.location));
         return nonBlacklistedDirs.toArray(new DataDirectory[nonBlacklistedDirs.size()]);
     }
 

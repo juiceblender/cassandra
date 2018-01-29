@@ -178,6 +178,7 @@ public class Config
     public volatile int inter_dc_stream_throughput_outbound_megabits_per_sec = 200;
 
     public String[] data_file_directories = new String[0];
+    public String [] archive_file_directories = new String[0];
 
     public String saved_caches_directory;
 

@@ -34,6 +34,7 @@ import com.google.common.collect.*;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import org.apache.cassandra.config.DatabaseDescriptor;
 import org.apache.cassandra.db.ColumnFamilyStore;
 import org.apache.cassandra.db.lifecycle.SSTableSet;
 import org.apache.cassandra.db.lifecycle.LifecycleTransaction;
@@ -77,23 +78,31 @@ public class TimeWindowCompactionStrategy extends AbstractCompactionStrategy
         {
             List<SSTableReader> latestBucket = getNextBackgroundSSTables(gcBefore);
 
-            if (latestBucket.isEmpty())
-                return null;
-
-            // Already tried acquiring references without success. It means there is a race with
-            // the tracker but candidate SSTables were not yet replaced in the compaction strategy manager
-            if (latestBucket.equals(previousCandidate))
+            if (!latestBucket.isEmpty())
             {
-                logger.warn("Could not acquire references for compacting SSTables {} which is not a problem per se," +
-                            "unless it happens frequently, in which case it must be reported. Will retry later.",
-                            latestBucket);
-                return null;
-            }
+                // Already tried acquiring references without success. It means there is a race with
+                // the tracker but candidate SSTables were not yet replaced in the compaction strategy manager
+                if (latestBucket.equals(previousCandidate))
+                {
+                    logger.warn("Could not acquire references for compacting SSTables {} which is not a problem per se," +
+                                "unless it happens frequently, in which case it must be reported. Will retry later.",
+                                latestBucket);
+                    return null;
+                }
 
-            LifecycleTransaction modifier = cfs.getTracker().tryModify(latestBucket, OperationType.COMPACTION);
-            if (modifier != null)
-                return new TimeWindowCompactionTask(cfs, modifier, gcBefore, options.ignoreOverlaps);
-            previousCandidate = latestBucket;
+                LifecycleTransaction modifier = cfs.getTracker().tryModify(latestBucket, OperationType.COMPACTION);
+                if (modifier != null)
+                    return new TimeWindowCompactionTask(cfs, modifier, gcBefore, options.ignoreOverlaps, false);
+                previousCandidate = latestBucket;
+            } else {
+                List<SSTableReader> archivableSSTables = getArchivableSSTables();
+                if (archivableSSTables.isEmpty())
+                    return null;
+
+                LifecycleTransaction modifier = cfs.getTracker().tryModify(archivableSSTables, OperationType.COMPACTION);
+                if (modifier != null)
+                    return new TimeWindowCompactionTask(cfs, modifier, gcBefore, options.ignoreOverlaps, true);
+            }
         }
     }
 
@@ -157,6 +166,18 @@ public class TimeWindowCompactionStrategy extends AbstractCompactionStrategy
             return Collections.emptyList();
 
         return Collections.singletonList(Collections.min(sstablesWithTombstones, SSTableReader.sizeComparator));
+    }
+
+    private List<SSTableReader> getArchivableSSTables() {
+        if (!(options.archiveSSTablesAfterSize > 0) || DatabaseDescriptor.getAllArchiveDataFileLocations() == null) {
+            return Collections.emptyList();
+        }
+
+        final long now = System.currentTimeMillis() - TimeUnit.MILLISECONDS.convert(options.archiveSSTablesAfterSize, options.archiveSSTablesAfterUnit);
+        Set<SSTableReader> uncompacting = ImmutableSet.copyOf(filter(cfs.getUncompactingSSTables(), sstables::contains));
+        Set<SSTableReader> candidates = Sets.newHashSet(filterSuspectSSTables(uncompacting));
+
+        return ImmutableList.copyOf(filter(candidates, candidate -> !candidate.isInArchivingDirectory() && candidate.getMaxTimestamp() < now));
     }
 
     private List<SSTableReader> getCompactionCandidates(Iterable<SSTableReader> candidateSSTables)
@@ -348,7 +369,7 @@ public class TimeWindowCompactionStrategy extends AbstractCompactionStrategy
         LifecycleTransaction txn = cfs.getTracker().tryModify(filteredSSTables, OperationType.COMPACTION);
         if (txn == null)
             return null;
-        return Collections.singleton(new TimeWindowCompactionTask(cfs, txn, gcBefore, options.ignoreOverlaps));
+        return Collections.singleton(new TimeWindowCompactionTask(cfs, txn, gcBefore, options.ignoreOverlaps, false));
     }
 
     @Override
@@ -364,7 +385,7 @@ public class TimeWindowCompactionStrategy extends AbstractCompactionStrategy
             return null;
         }
 
-        return new TimeWindowCompactionTask(cfs, modifier, gcBefore, options.ignoreOverlaps).setUserDefined(true);
+        return new TimeWindowCompactionTask(cfs, modifier, gcBefore, options.ignoreOverlaps, false).setUserDefined(true);
     }
 
     public int getEstimatedRemainingTasks()

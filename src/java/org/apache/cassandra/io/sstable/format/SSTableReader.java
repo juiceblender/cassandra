@@ -1797,6 +1797,17 @@ public abstract class SSTableReader extends SSTable implements SelfRefCounted<SS
         return sstableMetadata.pendingRepair != ActiveRepairService.NO_PENDING_REPAIR;
     }
 
+    public boolean isInArchivingDirectory() {
+        final String[] archiveDirectories = DatabaseDescriptor.getAllArchiveDataFileLocations();
+
+        if (archiveDirectories == null)
+            return false;
+
+        final String directory = descriptor.directory.getAbsolutePath();
+
+        return Arrays.stream(archiveDirectories).anyMatch(dir -> directory.startsWith(FileUtils.getCanonicalPath(dir)));
+    }
+
     public UUID getPendingRepair()
     {
         return sstableMetadata.pendingRepair;

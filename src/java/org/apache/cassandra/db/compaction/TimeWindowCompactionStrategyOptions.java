@@ -44,6 +44,8 @@ public final class TimeWindowCompactionStrategyOptions
     protected static final String COMPACTION_WINDOW_SIZE_KEY = "compaction_window_size";
     protected static final String EXPIRED_SSTABLE_CHECK_FREQUENCY_SECONDS_KEY = "expired_sstable_check_frequency_seconds";
     protected static final String UNSAFE_AGGRESSIVE_SSTABLE_EXPIRATION_KEY = "unsafe_aggressive_sstable_expiration";
+    protected static final String ARCHIVE_SSTABLES_SIZE_KEY = "archive_sstable_after_size";
+    protected static final String ARCHIVE_SSTABLES_UNIT_KEY = "archive_sstable_after_unit";
 
     static final String UNSAFE_AGGRESSIVE_SSTABLE_EXPIRATION_PROPERTY = Config.PROPERTY_PREFIX + "allow_unsafe_aggressive_sstable_expiration";
 
@@ -52,6 +54,8 @@ public final class TimeWindowCompactionStrategyOptions
     protected final TimeUnit timestampResolution;
     protected final long expiredSSTableCheckFrequency;
     protected final boolean ignoreOverlaps;
+    protected final TimeUnit archiveSSTablesAfterUnit;
+    protected final int archiveSSTablesAfterSize;
 
     SizeTieredCompactionStrategyOptions stcsOptions;
 
@@ -77,6 +81,12 @@ public final class TimeWindowCompactionStrategyOptions
         optionValue = options.get(UNSAFE_AGGRESSIVE_SSTABLE_EXPIRATION_KEY);
         ignoreOverlaps = optionValue == null ? DEFAULT_UNSAFE_AGGRESSIVE_SSTABLE_EXPIRATION : (Boolean.getBoolean(UNSAFE_AGGRESSIVE_SSTABLE_EXPIRATION_PROPERTY) && Boolean.parseBoolean(optionValue));
 
+        optionValue = options.get(ARCHIVE_SSTABLES_UNIT_KEY);
+        archiveSSTablesAfterUnit = optionValue == null ? TimeUnit.DAYS : TimeUnit.valueOf(optionValue);
+
+        optionValue = options.get(ARCHIVE_SSTABLES_SIZE_KEY);
+        archiveSSTablesAfterSize = optionValue == null ? -1 : Integer.parseInt(optionValue);
+
         stcsOptions = new SizeTieredCompactionStrategyOptions(options);
     }
 
@@ -88,6 +98,8 @@ public final class TimeWindowCompactionStrategyOptions
         expiredSSTableCheckFrequency = TimeUnit.MILLISECONDS.convert(DEFAULT_EXPIRED_SSTABLE_CHECK_FREQUENCY_SECONDS, TimeUnit.SECONDS);
         ignoreOverlaps = DEFAULT_UNSAFE_AGGRESSIVE_SSTABLE_EXPIRATION;
         stcsOptions = new SizeTieredCompactionStrategyOptions();
+        archiveSSTablesAfterSize = -1;
+        archiveSSTablesAfterUnit = TimeUnit.DAYS;
     }
 
     public static Map<String, String> validateOptions(Map<String, String> options, Map<String, String> uncheckedOptions) throws  ConfigurationException
@@ -157,11 +169,19 @@ public final class TimeWindowCompactionStrategyOptions
                 throw new ConfigurationException(String.format("%s is requested but not allowed, restart cassandra with -D%s=true to allow it", UNSAFE_AGGRESSIVE_SSTABLE_EXPIRATION_KEY, UNSAFE_AGGRESSIVE_SSTABLE_EXPIRATION_PROPERTY));
         }
 
+        optionValue = options.get(ARCHIVE_SSTABLES_SIZE_KEY);
+        if (optionValue != null)
+        {
+            if (Integer.parseInt(optionValue) < 0)
+                throw new ConfigurationException(String.format("You can't set %s to a non-positive value", ARCHIVE_SSTABLES_SIZE_KEY));
+        }
+
         uncheckedOptions.remove(COMPACTION_WINDOW_SIZE_KEY);
         uncheckedOptions.remove(COMPACTION_WINDOW_UNIT_KEY);
         uncheckedOptions.remove(TIMESTAMP_RESOLUTION_KEY);
         uncheckedOptions.remove(EXPIRED_SSTABLE_CHECK_FREQUENCY_SECONDS_KEY);
         uncheckedOptions.remove(UNSAFE_AGGRESSIVE_SSTABLE_EXPIRATION_KEY);
+        uncheckedOptions.remove(ARCHIVE_SSTABLES_SIZE_KEY);
 
         uncheckedOptions = SizeTieredCompactionStrategyOptions.validateOptions(options, uncheckedOptions);
 

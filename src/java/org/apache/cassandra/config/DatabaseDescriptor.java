@@ -62,6 +62,7 @@ import org.apache.cassandra.security.EncryptionContext;
 import org.apache.cassandra.service.CacheService.CacheType;
 import org.apache.cassandra.utils.FBUtilities;
 
+import org.apache.commons.lang3.ArrayUtils;
 import org.apache.commons.lang3.StringUtils;
 
 import static org.apache.cassandra.io.util.FileUtils.ONE_GB;
@@ -531,7 +532,13 @@ public class DatabaseDescriptor
 
         long dataFreeBytes = 0;
         /* data file and commit log directories. they get created later, when they're needed. */
-        for (String datadir : conf.data_file_directories)
+        if (conf.archive_file_directories != null) {
+            final boolean match = Arrays.stream(conf.archive_file_directories).anyMatch(Arrays.asList(conf.data_file_directories)::contains);
+            if (match)
+                throw new ConfigurationException("data_file_directories cannot share the same entries as archive_file_directories", false);
+        }
+
+        for (String datadir : ArrayUtils.addAll(conf.data_file_directories, conf.archive_file_directories))
         {
             if (datadir == null)
                 throw new ConfigurationException("data_file_directories must not contain empty entry", false);
@@ -553,6 +560,7 @@ public class DatabaseDescriptor
                                                                datadir), e);
             }
         }
+
         if (dataFreeBytes < 64 * ONE_GB) // 64 GB
             logger.warn("Only {} free across all data volumes. Consider adding more capacity to your cluster or removing obsolete snapshots",
                         FBUtilities.prettyPrintMemory(dataFreeBytes));
@@ -1179,7 +1187,7 @@ public class DatabaseDescriptor
             if (conf.data_file_directories.length == 0)
                 throw new ConfigurationException("At least one DataFileDirectory must be specified", false);
 
-            for (String dataFileDirectory : conf.data_file_directories)
+            for (String dataFileDirectory : ArrayUtils.addAll(conf.data_file_directories, conf.archive_file_directories))
                 FileUtils.createDirectory(dataFileDirectory);
 
             if (conf.commitlog_directory == null)
@@ -1569,7 +1577,17 @@ public class DatabaseDescriptor
 
     public static String[] getAllDataFileLocations()
     {
+        return ArrayUtils.addAll(conf.data_file_directories, conf.archive_file_directories);
+    }
+
+    public static String[] getAllStandardDataFileLocations()
+    {
         return conf.data_file_directories;
+    }
+
+    public static String[] getAllArchiveDataFileLocations()
+    {
+        return conf.archive_file_directories;
     }
 
     public static String getCommitLogLocation()

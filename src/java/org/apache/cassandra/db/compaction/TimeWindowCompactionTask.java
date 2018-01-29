@@ -21,22 +21,36 @@ package org.apache.cassandra.db.compaction;
 import java.util.Set;
 
 import org.apache.cassandra.db.ColumnFamilyStore;
+import org.apache.cassandra.db.Directories;
+import org.apache.cassandra.db.compaction.writers.ArchivingTimeWindowCompactionWriter;
+import org.apache.cassandra.db.compaction.writers.CompactionAwareWriter;
 import org.apache.cassandra.db.lifecycle.LifecycleTransaction;
 import org.apache.cassandra.io.sstable.format.SSTableReader;
 
 public class TimeWindowCompactionTask extends CompactionTask
 {
     private final boolean ignoreOverlaps;
+    private final boolean archivingCompaction;
 
-    public TimeWindowCompactionTask(ColumnFamilyStore cfs, LifecycleTransaction txn, int gcBefore, boolean ignoreOverlaps)
+    public TimeWindowCompactionTask(ColumnFamilyStore cfs, LifecycleTransaction txn, int gcBefore, boolean ignoreOverlaps, boolean archivingCompaction)
     {
         super(cfs, txn, gcBefore);
         this.ignoreOverlaps = ignoreOverlaps;
+        this.archivingCompaction = archivingCompaction;
     }
 
     @Override
     public CompactionController getCompactionController(Set<SSTableReader> toCompact)
     {
         return new TimeWindowCompactionController(cfs, toCompact, gcBefore, ignoreOverlaps);
+    }
+
+    @Override
+    public CompactionAwareWriter getCompactionAwareWriter(ColumnFamilyStore cfs,
+                                                          Directories directories,
+                                                          LifecycleTransaction transaction,
+                                                          Set<SSTableReader> nonExpiredSSTables)
+    {
+        return new ArchivingTimeWindowCompactionWriter(cfs, directories, transaction, nonExpiredSSTables, keepOriginals, archivingCompaction);
     }
 }

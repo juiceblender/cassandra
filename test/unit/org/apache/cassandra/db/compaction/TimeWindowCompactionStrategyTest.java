@@ -17,7 +17,10 @@
  */
 package org.apache.cassandra.db.compaction;
 
+import java.io.IOException;
 import java.nio.ByteBuffer;
+import java.nio.file.Files;
+import java.nio.file.Paths;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -26,17 +29,12 @@ import java.util.concurrent.TimeUnit;
 
 import com.google.common.collect.HashMultimap;
 import com.google.common.collect.Iterables;
-
 import org.junit.BeforeClass;
 import org.junit.Test;
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertNotNull;
-import static org.junit.Assert.assertNull;
-import static org.junit.Assert.assertTrue;
-import static org.junit.Assert.fail;
 
 import org.apache.cassandra.SchemaLoader;
 import org.apache.cassandra.Util;
+import org.apache.cassandra.config.DatabaseDescriptor;
 import org.apache.cassandra.db.ColumnFamilyStore;
 import org.apache.cassandra.db.DecoratedKey;
 import org.apache.cassandra.db.Keyspace;
@@ -49,6 +47,13 @@ import org.apache.cassandra.utils.Pair;
 import static org.apache.cassandra.db.compaction.TimeWindowCompactionStrategy.getWindowBoundsInMillis;
 import static org.apache.cassandra.db.compaction.TimeWindowCompactionStrategy.newestBucket;
 import static org.apache.cassandra.db.compaction.TimeWindowCompactionStrategy.validateOptions;
+import static org.apache.cassandra.db.compaction.TimeWindowCompactionStrategyOptions.*;
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertNotNull;
+import static org.junit.Assert.assertNull;
+import static org.junit.Assert.assertTrue;
+import static org.junit.Assert.fail;
 
 public class TimeWindowCompactionStrategyTest extends SchemaLoader
 {
@@ -60,7 +65,7 @@ public class TimeWindowCompactionStrategyTest extends SchemaLoader
     {
         // Disable tombstone histogram rounding for tests
         System.setProperty("cassandra.streaminghistogram.roundseconds", "1");
-        System.setProperty(TimeWindowCompactionStrategyOptions.UNSAFE_AGGRESSIVE_SSTABLE_EXPIRATION_PROPERTY, "true");
+        System.setProperty(UNSAFE_AGGRESSIVE_SSTABLE_EXPIRATION_PROPERTY, "true");
 
         SchemaLoader.prepareServer();
 
@@ -73,50 +78,50 @@ public class TimeWindowCompactionStrategyTest extends SchemaLoader
     public void testOptionsValidation() throws ConfigurationException
     {
         Map<String, String> options = new HashMap<>();
-        options.put(TimeWindowCompactionStrategyOptions.COMPACTION_WINDOW_SIZE_KEY, "30");
-        options.put(TimeWindowCompactionStrategyOptions.COMPACTION_WINDOW_UNIT_KEY, "MINUTES");
+        options.put(COMPACTION_WINDOW_SIZE_KEY, "30");
+        options.put(COMPACTION_WINDOW_UNIT_KEY, "MINUTES");
         Map<String, String> unvalidated = validateOptions(options);
         assertTrue(unvalidated.isEmpty());
 
         try
         {
-            options.put(TimeWindowCompactionStrategyOptions.COMPACTION_WINDOW_SIZE_KEY, "0");
+            options.put(COMPACTION_WINDOW_SIZE_KEY, "0");
             validateOptions(options);
-            fail(String.format("%s == 0 should be rejected", TimeWindowCompactionStrategyOptions.COMPACTION_WINDOW_SIZE_KEY));
+            fail(String.format("%s == 0 should be rejected", COMPACTION_WINDOW_SIZE_KEY));
         }
         catch (ConfigurationException e) {}
 
         try
         {
-            options.put(TimeWindowCompactionStrategyOptions.COMPACTION_WINDOW_SIZE_KEY, "-1337");
+            options.put(COMPACTION_WINDOW_SIZE_KEY, "-1337");
             validateOptions(options);
-            fail(String.format("Negative %s should be rejected", TimeWindowCompactionStrategyOptions.COMPACTION_WINDOW_SIZE_KEY));
+            fail(String.format("Negative %s should be rejected", COMPACTION_WINDOW_SIZE_KEY));
         }
         catch (ConfigurationException e)
         {
-            options.put(TimeWindowCompactionStrategyOptions.COMPACTION_WINDOW_SIZE_KEY, "1");
+            options.put(COMPACTION_WINDOW_SIZE_KEY, "1");
         }
 
         try
         {
-            options.put(TimeWindowCompactionStrategyOptions.COMPACTION_WINDOW_UNIT_KEY, "MONTHS");
+            options.put(COMPACTION_WINDOW_UNIT_KEY, "MONTHS");
             validateOptions(options);
-            fail(String.format("Invalid %s should be rejected", TimeWindowCompactionStrategyOptions.COMPACTION_WINDOW_UNIT_KEY));
+            fail(String.format("Invalid %s should be rejected", COMPACTION_WINDOW_UNIT_KEY));
         }
         catch (ConfigurationException e)
         {
-            options.put(TimeWindowCompactionStrategyOptions.COMPACTION_WINDOW_UNIT_KEY, "MINUTES");
+            options.put(COMPACTION_WINDOW_UNIT_KEY, "MINUTES");
         }
 
         try
         {
-            options.put(TimeWindowCompactionStrategyOptions.UNSAFE_AGGRESSIVE_SSTABLE_EXPIRATION_KEY, "not-a-boolean");
+            options.put(UNSAFE_AGGRESSIVE_SSTABLE_EXPIRATION_KEY, "not-a-boolean");
             validateOptions(options);
-            fail(String.format("Invalid %s should be rejected", TimeWindowCompactionStrategyOptions.UNSAFE_AGGRESSIVE_SSTABLE_EXPIRATION_KEY));
+            fail(String.format("Invalid %s should be rejected", UNSAFE_AGGRESSIVE_SSTABLE_EXPIRATION_KEY));
         }
         catch (ConfigurationException e)
         {
-            options.put(TimeWindowCompactionStrategyOptions.UNSAFE_AGGRESSIVE_SSTABLE_EXPIRATION_KEY, "true");
+            options.put(UNSAFE_AGGRESSIVE_SSTABLE_EXPIRATION_KEY, "true");
         }
 
         options.put("bad_option", "1.0");
@@ -151,10 +156,7 @@ public class TimeWindowCompactionStrategyTest extends SchemaLoader
     @Test
     public void testPrepBucket()
     {
-        Keyspace keyspace = Keyspace.open(KEYSPACE1);
-        ColumnFamilyStore cfs = keyspace.getColumnFamilyStore(CF_STANDARD1);
-        cfs.truncateBlocking();
-        cfs.disableAutoCompaction();
+        final ColumnFamilyStore cfs = prepareCFS();
 
         ByteBuffer value = ByteBuffer.wrap(new byte[100]);
         Long tstamp = System.currentTimeMillis();
@@ -239,10 +241,7 @@ public class TimeWindowCompactionStrategyTest extends SchemaLoader
     @Test
     public void testDropExpiredSSTables() throws InterruptedException
     {
-        Keyspace keyspace = Keyspace.open(KEYSPACE1);
-        ColumnFamilyStore cfs = keyspace.getColumnFamilyStore(CF_STANDARD1);
-        cfs.truncateBlocking();
-        cfs.disableAutoCompaction();
+        final ColumnFamilyStore cfs = prepareCFS();
 
         ByteBuffer value = ByteBuffer.wrap(new byte[100]);
 
@@ -266,10 +265,10 @@ public class TimeWindowCompactionStrategyTest extends SchemaLoader
 
         Map<String, String> options = new HashMap<>();
 
-        options.put(TimeWindowCompactionStrategyOptions.COMPACTION_WINDOW_SIZE_KEY, "30");
-        options.put(TimeWindowCompactionStrategyOptions.COMPACTION_WINDOW_UNIT_KEY, "SECONDS");
-        options.put(TimeWindowCompactionStrategyOptions.TIMESTAMP_RESOLUTION_KEY, "MILLISECONDS");
-        options.put(TimeWindowCompactionStrategyOptions.EXPIRED_SSTABLE_CHECK_FREQUENCY_SECONDS_KEY, "0");
+        options.put(COMPACTION_WINDOW_SIZE_KEY, "30");
+        options.put(COMPACTION_WINDOW_UNIT_KEY, "SECONDS");
+        options.put(TIMESTAMP_RESOLUTION_KEY, "MILLISECONDS");
+        options.put(EXPIRED_SSTABLE_CHECK_FREQUENCY_SECONDS_KEY, "0");
         TimeWindowCompactionStrategy twcs = new TimeWindowCompactionStrategy(cfs, options);
         for (SSTableReader sstable : cfs.getLiveSSTables())
             twcs.addSSTable(sstable);
@@ -287,10 +286,7 @@ public class TimeWindowCompactionStrategyTest extends SchemaLoader
     @Test
     public void testDropOverlappingExpiredSSTables() throws InterruptedException
     {
-        Keyspace keyspace = Keyspace.open(KEYSPACE1);
-        ColumnFamilyStore cfs = keyspace.getColumnFamilyStore(CF_STANDARD1);
-        cfs.truncateBlocking();
-        cfs.disableAutoCompaction();
+        final ColumnFamilyStore cfs = prepareCFS();
 
         ByteBuffer value = ByteBuffer.wrap(new byte[100]);
 
@@ -317,10 +313,11 @@ public class TimeWindowCompactionStrategyTest extends SchemaLoader
 
         Map<String, String> options = new HashMap<>();
 
-        options.put(TimeWindowCompactionStrategyOptions.COMPACTION_WINDOW_SIZE_KEY, "30");
-        options.put(TimeWindowCompactionStrategyOptions.COMPACTION_WINDOW_UNIT_KEY, "SECONDS");
-        options.put(TimeWindowCompactionStrategyOptions.TIMESTAMP_RESOLUTION_KEY, "MILLISECONDS");
-        options.put(TimeWindowCompactionStrategyOptions.EXPIRED_SSTABLE_CHECK_FREQUENCY_SECONDS_KEY, "0");
+        options.put(COMPACTION_WINDOW_SIZE_KEY, "30");
+        options.put(COMPACTION_WINDOW_UNIT_KEY, "SECONDS");
+        options.put(TIMESTAMP_RESOLUTION_KEY, "MILLISECONDS");
+        options.put(ARCHIVE_SSTABLES_SIZE_KEY, "1");
+        options.put(EXPIRED_SSTABLE_CHECK_FREQUENCY_SECONDS_KEY, "0");
         TimeWindowCompactionStrategy twcs = new TimeWindowCompactionStrategy(cfs, options);
         for (SSTableReader sstable : cfs.getLiveSSTables())
             twcs.addSSTable(sstable);
@@ -330,7 +327,7 @@ public class TimeWindowCompactionStrategyTest extends SchemaLoader
         Thread.sleep(2000);
         assertNull(twcs.getNextBackgroundTask((int) (System.currentTimeMillis()/1000)));
 
-        options.put(TimeWindowCompactionStrategyOptions.UNSAFE_AGGRESSIVE_SSTABLE_EXPIRATION_KEY, "true");
+        options.put(UNSAFE_AGGRESSIVE_SSTABLE_EXPIRATION_KEY, "true");
         twcs = new TimeWindowCompactionStrategy(cfs, options);
         for (SSTableReader sstable : cfs.getLiveSSTables())
             twcs.addSSTable(sstable);
@@ -343,5 +340,57 @@ public class TimeWindowCompactionStrategyTest extends SchemaLoader
         assertEquals(sstable, expiredSSTable);
         twcs.shutdown();
         t.transaction.abort();
+    }
+
+    @SuppressWarnings("ConstantConditions")
+    @Test
+    public void testArchivingSSTables() throws IOException, InterruptedException
+    {
+        final ColumnFamilyStore cfs = prepareCFS();
+
+        final ByteBuffer value = ByteBuffer.wrap(new byte[100]);
+        final DecoratedKey key = Util.dk("archived");
+        new RowUpdateBuilder(cfs.metadata(), System.currentTimeMillis(), key.getKey())
+        .clustering("column").add("val", value).build().applyUnsafe();
+
+        cfs.forceBlockingFlush();
+
+        //Verify that the newly flushed SSTable is not present in the archive directory
+        assertFalse(Files.walk(Paths.get(DatabaseDescriptor.getAllArchiveDataFileLocations()[0]).resolve(KEYSPACE1)).anyMatch(d -> d.toString().contains("Data.db")));
+        assertTrue(Files.walk(Paths.get(DatabaseDescriptor.getAllStandardDataFileLocations()[0]).resolve(KEYSPACE1)).anyMatch(d -> d.toString().contains("Data.db")));
+
+        TimeWindowCompactionStrategy twcs = new TimeWindowCompactionStrategy(cfs, new HashMap<String, String>() {{
+            put(COMPACTION_WINDOW_SIZE_KEY, "30");
+            put(COMPACTION_WINDOW_UNIT_KEY, "SECONDS");
+            put(TIMESTAMP_RESOLUTION_KEY, "MILLISECONDS");
+            put(ARCHIVE_SSTABLES_SIZE_KEY, "5");
+            put(ARCHIVE_SSTABLES_UNIT_KEY, "SECONDS");
+        }});
+
+        cfs.getLiveSSTables().forEach(twcs::addSSTable);
+        twcs.startup();
+
+        //There's just a single SSTable with no tombstones and it hasn't passed archive time yet, so we expect
+        //to have no compaction tasks.
+        assertNull(twcs.getNextBackgroundTask((int) System.currentTimeMillis() / 1000));
+
+        Thread.sleep(6000);
+        AbstractCompactionTask t = twcs.getNextBackgroundTask((int) System.currentTimeMillis() / 1000);
+
+        //It's now past the archive time window, so we expect there to be a compaction task to write to archive
+        assertNotNull(t);
+        t.execute(null);
+
+        assertTrue(Files.walk(Paths.get(DatabaseDescriptor.getAllArchiveDataFileLocations()[0]).resolve(KEYSPACE1)).anyMatch(d -> d.toString().contains("Data.db")));
+
+        //Instant.ofEpochMilli(now).atZone(ZoneId.of("Australia/Sydney")).format(DateTimeFormatter.ofPattern("dd/MM/yyyy HH:mm:ss"));
+    }
+
+    private ColumnFamilyStore prepareCFS() {
+        Keyspace keyspace = Keyspace.open(KEYSPACE1);
+        ColumnFamilyStore cfs = keyspace.getColumnFamilyStore(CF_STANDARD1);
+        cfs.truncateBlocking();
+        cfs.disableAutoCompaction();
+        return cfs;
     }
 }

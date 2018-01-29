@@ -183,12 +183,19 @@ credentials_validity_in_ms: 2000
 #
 partitioner: org.apache.cassandra.dht.Murmur3Partitioner
 
-# Directories where Cassandra should store data on disk.  Cassandra
+# Directories where Cassandra should store data on disk. Cassandra
 # will spread data evenly across them, subject to the granularity of
 # the configured compaction strategy.
 # If not set, the default directory is $CASSANDRA_HOME/data/data.
 # data_file_directories:
 #     - /var/lib/cassandra/data
+
+# Archive directories where Cassandra should archive data to once they
+# are past a certain age. This could be useful for time series based data
+# where some (infrequently read) data can be archived to a slower disk to save costs.
+# Cassandra will spread data evenly across them. If not set, then no archival takes place.
+# archive_file_directories:
+#     - /var/lib/cassandra/data_archive
 
 # commit log.  when running on magnetic HDD, this should be a
 # separate spindle than the data directories.
