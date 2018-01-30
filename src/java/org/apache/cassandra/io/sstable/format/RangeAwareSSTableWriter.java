@@ -55,7 +55,7 @@ public class RangeAwareSSTableWriter implements SSTableMultiWriter
 
     public RangeAwareSSTableWriter(ColumnFamilyStore cfs, long estimatedKeys, long repairedAt, UUID pendingRepair, SSTableFormat.Type format, int sstableLevel, long totalSize, LifecycleTransaction txn, SerializationHeader header) throws IOException
     {
-        DiskBoundaries db = cfs.getDiskBoundaries();
+        DiskBoundaries db = cfs.getDiskBoundaries(Directories.DirectoryType.STANDARD);
         directories = db.directories;
         this.sstableLevel = sstableLevel;
         this.cfs = cfs;

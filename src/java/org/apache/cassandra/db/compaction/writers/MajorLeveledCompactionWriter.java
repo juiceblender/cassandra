@@ -71,7 +71,7 @@ public class MajorLeveledCompactionWriter extends CompactionAwareWriter
                                         long maxSSTableSize,
                                         boolean keepOriginals)
     {
-        super(cfs, directories, txn, nonExpiredSSTables, keepOriginals);
+        super(cfs, directories, txn, nonExpiredSSTables, keepOriginals, false);
         this.maxSSTableSize = maxSSTableSize;
         this.levelFanoutSize = cfs.getLevelFanoutSize();
         long estimatedSSTables = Math.max(1, SSTableReader.getTotalBytes(nonExpiredSSTables) / maxSSTableSize);

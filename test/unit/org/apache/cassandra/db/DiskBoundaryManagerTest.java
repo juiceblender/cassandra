@@ -63,19 +63,19 @@ public class DiskBoundaryManagerTest extends CQLTester
     @Test
     public void getBoundariesTest()
     {
-        DiskBoundaries dbv = dbm.getDiskBoundaries(mock);
+        DiskBoundaries dbv = dbm.getDiskBoundaries(mock, Directories.DirectoryType.STANDARD);
         Assert.assertEquals(3, dbv.positions.size());
-        assertEquals(dbv.directories, dirs.getWriteableLocations());
+        assertEquals(dbv.directories, dirs.getWriteableLocations(Directories.DirectoryType.STANDARD));
     }
 
     @Test
     public void blackListTest()
     {
-        DiskBoundaries dbv = dbm.getDiskBoundaries(mock);
+        DiskBoundaries dbv = dbm.getDiskBoundaries(mock, Directories.DirectoryType.STANDARD);
         Assert.assertEquals(3, dbv.positions.size());
-        assertEquals(dbv.directories, dirs.getWriteableLocations());
+        assertEquals(dbv.directories, dirs.getWriteableLocations(Directories.DirectoryType.STANDARD));
         BlacklistedDirectories.maybeMarkUnwritable(new File("/tmp/3"));
-        dbv = dbm.getDiskBoundaries(mock);
+        dbv = dbm.getDiskBoundaries(mock, Directories.DirectoryType.STANDARD);
         Assert.assertEquals(2, dbv.positions.size());
         Assert.assertEquals(Lists.newArrayList(new Directories.DataDirectory(new File("/tmp/1")),
                                         new Directories.DataDirectory(new File("/tmp/2"))),
@@ -85,9 +85,9 @@ public class DiskBoundaryManagerTest extends CQLTester
     @Test
     public void updateTokensTest() throws UnknownHostException
     {
-        DiskBoundaries dbv1 = dbm.getDiskBoundaries(mock);
+        DiskBoundaries dbv1 = dbm.getDiskBoundaries(mock, Directories.DirectoryType.STANDARD);
         StorageService.instance.getTokenMetadata().updateNormalTokens(BootStrapper.getRandomTokens(StorageService.instance.getTokenMetadata(), 10), InetAddress.getByName("127.0.0.10"));
-        DiskBoundaries dbv2 = dbm.getDiskBoundaries(mock);
+        DiskBoundaries dbv2 = dbm.getDiskBoundaries(mock, Directories.DirectoryType.STANDARD);
         assertFalse(dbv1.equals(dbv2));
     }
 
@@ -96,11 +96,11 @@ public class DiskBoundaryManagerTest extends CQLTester
     {
         //do not use mock to since it will not be invalidated after alter keyspace
         DiskBoundaryManager dbm = getCurrentColumnFamilyStore().diskBoundaryManager;
-        DiskBoundaries dbv1 = dbm.getDiskBoundaries(mock);
+        DiskBoundaries dbv1 = dbm.getDiskBoundaries(mock, Directories.DirectoryType.STANDARD);
         execute("alter keyspace "+keyspace()+" with replication = { 'class' : 'SimpleStrategy', 'replication_factor' : 3 }");
-        DiskBoundaries dbv2 = dbm.getDiskBoundaries(mock);
+        DiskBoundaries dbv2 = dbm.getDiskBoundaries(mock, Directories.DirectoryType.STANDARD);
         assertNotSame(dbv1, dbv2);
-        DiskBoundaries dbv3 = dbm.getDiskBoundaries(mock);
+        DiskBoundaries dbv3 = dbm.getDiskBoundaries(mock, Directories.DirectoryType.STANDARD);
         assertSame(dbv2, dbv3);
 
     }

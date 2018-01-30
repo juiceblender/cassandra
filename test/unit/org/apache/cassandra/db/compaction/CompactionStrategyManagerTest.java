@@ -22,6 +22,7 @@ import java.io.File;
 import java.io.IOException;
 import java.util.Arrays;
 import java.util.Collections;
+import java.util.EnumMap;
 import java.util.List;
 import java.util.Set;
 import java.util.stream.Collectors;
@@ -136,7 +137,11 @@ public class CompactionStrategyManagerTest
 
         MockBoundaryManager mockBoundaryManager = new MockBoundaryManager(cfs, boundaries);
         System.out.println("Boundaries for " + numDisks + " disks is " + Arrays.toString(boundaries));
-        CompactionStrategyManager csm = new CompactionStrategyManager(cfs, mockBoundaryManager::getBoundaries,
+        CompactionStrategyManager csm = new CompactionStrategyManager(cfs, () -> {
+            return new EnumMap<Directories.DirectoryType, DiskBoundaries>(Directories.DirectoryType.class) {{
+                put(Directories.DirectoryType.STANDARD, mockBoundaryManager.getBoundaries());
+            }};
+        },
                                                                       true);
 
         // Check that SSTables are assigned to the correct Compaction Strategy
@@ -281,7 +286,7 @@ public class CompactionStrategyManagerTest
         private DiskBoundaries createDiskBoundaries(ColumnFamilyStore cfs, Integer[] boundaries)
         {
             List<PartitionPosition> positions = Arrays.stream(boundaries).map(b -> Util.token(String.format(String.format("%04d", b))).minKeyBound()).collect(Collectors.toList());
-            return new DiskBoundaries(cfs.getDirectories().getWriteableLocations(), positions, 0, 0);
+            return new DiskBoundaries(cfs.getDirectories().getWriteableLocations(Directories.DirectoryType.STANDARD), positions, 0, 0);
         }
     }
 

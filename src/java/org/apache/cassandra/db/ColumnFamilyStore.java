@@ -2627,9 +2627,8 @@ public class ColumnFamilyStore implements ColumnFamilyStoreMBean
         return getIfExists(tableId).metric;
     }
 
-    public DiskBoundaries getDiskBoundaries()
-    {
-        return diskBoundaryManager.getDiskBoundaries(this);
+    public DiskBoundaries getDiskBoundaries(Directories.DirectoryType directoryType) {
+        return diskBoundaryManager.getDiskBoundaries(this, directoryType);
     }
 
     public void invalidateDiskBoundaries()

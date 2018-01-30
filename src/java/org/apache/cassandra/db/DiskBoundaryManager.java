@@ -20,6 +20,8 @@ package org.apache.cassandra.db;
 
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.EnumMap;
+import java.util.HashMap;
 import java.util.List;
 
 import org.slf4j.Logger;
@@ -38,12 +40,13 @@ import org.apache.cassandra.utils.FBUtilities;
 public class DiskBoundaryManager
 {
     private static final Logger logger = LoggerFactory.getLogger(DiskBoundaryManager.class);
-    private volatile DiskBoundaries diskBoundaries;
+    private final EnumMap<Directories.DirectoryType, DiskBoundaries> diskBoundariesBeingManaged = new EnumMap<>(Directories.DirectoryType.class);
 
-    public DiskBoundaries getDiskBoundaries(ColumnFamilyStore cfs)
+    public DiskBoundaries getDiskBoundaries(ColumnFamilyStore cfs, Directories.DirectoryType directoryType)
     {
+        DiskBoundaries diskBoundaries = diskBoundariesBeingManaged.get(directoryType);
         if (!cfs.getPartitioner().splitter().isPresent())
-            return new DiskBoundaries(cfs.getDirectories().getWriteableLocations(), BlacklistedDirectories.getDirectoriesVersion());
+            return new DiskBoundaries(cfs.getDirectories().getWriteableLocations(directoryType), BlacklistedDirectories.getDirectoriesVersion());
         if (diskBoundaries == null || diskBoundaries.isOutOfDate())
         {
             synchronized (this)
@@ -52,7 +55,8 @@ public class DiskBoundaryManager
                 {
                     logger.debug("Refreshing disk boundary cache for {}.{}", cfs.keyspace.getName(), cfs.getTableName());
                     DiskBoundaries oldBoundaries = diskBoundaries;
-                    diskBoundaries = getDiskBoundaryValue(cfs);
+                    diskBoundaries = getDiskBoundaryValue(cfs, directoryType);
+                    diskBoundariesBeingManaged.put(directoryType, diskBoundaries);
                     logger.debug("Updating boundaries from {} to {} for {}.{}", oldBoundaries, diskBoundaries, cfs.keyspace.getName(), cfs.getTableName());
                 }
             }
@@ -62,11 +66,13 @@ public class DiskBoundaryManager
 
     public void invalidate()
     {
-       if (diskBoundaries != null)
-           diskBoundaries.invalidate();
+       diskBoundariesBeingManaged.forEach((type, diskBoundary) -> {
+           if (diskBoundary != null)
+               diskBoundary.invalidate();
+       });
     }
 
-    private static DiskBoundaries getDiskBoundaryValue(ColumnFamilyStore cfs)
+    private static DiskBoundaries getDiskBoundaryValue(ColumnFamilyStore cfs, Directories.DirectoryType directoryType)
     {
         Collection<Range<Token>> localRanges;
 
@@ -99,7 +105,7 @@ public class DiskBoundaryManager
         do
         {
             directoriesVersion = BlacklistedDirectories.getDirectoriesVersion();
-            dirs = cfs.getDirectories().getWriteableLocations();
+            dirs = cfs.getDirectories().getWriteableLocations(directoryType);
         }
         while (directoriesVersion != BlacklistedDirectories.getDirectoriesVersion()); // if directoriesVersion has changed we need to recalculate
 

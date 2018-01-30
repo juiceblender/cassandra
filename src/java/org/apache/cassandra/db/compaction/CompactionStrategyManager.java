@@ -79,7 +79,7 @@ public class CompactionStrategyManager implements INotificationConsumer
     public final CompactionLogger compactionLogger;
     private final ColumnFamilyStore cfs;
     private final boolean partitionSSTablesByTokenRange;
-    private final Supplier<DiskBoundaries> boundariesSupplier;
+    private final Supplier<EnumMap<Directories.DirectoryType, DiskBoundaries>> boundariesSupplier;
 
     /**
      * Performs mutual exclusion on the variables below
@@ -95,7 +95,7 @@ public class CompactionStrategyManager implements INotificationConsumer
     private final List<AbstractCompactionStrategy> unrepaired = new ArrayList<>();
     private final List<PendingRepairManager> pendingRepairs = new ArrayList<>();
     private volatile CompactionParams params;
-    private DiskBoundaries currentBoundaries;
+    private EnumMap<Directories.DirectoryType, DiskBoundaries> currentBoundaries = new EnumMap<>(Directories.DirectoryType.class);
     private volatile boolean enabled = true;
     private volatile boolean isActive = true;
 
@@ -113,11 +113,14 @@ public class CompactionStrategyManager implements INotificationConsumer
 
     public CompactionStrategyManager(ColumnFamilyStore cfs)
     {
-        this(cfs, cfs::getDiskBoundaries, cfs.getPartitioner().splitter().isPresent());
+        this(cfs, () -> new EnumMap<Directories.DirectoryType, DiskBoundaries>(Directories.DirectoryType.class){{
+            put(Directories.DirectoryType.STANDARD, cfs.getDiskBoundaries(Directories.DirectoryType.STANDARD));
+            put(Directories.DirectoryType.ARCHIVE, cfs.getDiskBoundaries(Directories.DirectoryType.ARCHIVE));
+        }}, cfs.getPartitioner().splitter().isPresent());
     }
 
     @VisibleForTesting
-    public CompactionStrategyManager(ColumnFamilyStore cfs, Supplier<DiskBoundaries> boundariesSupplier,
+    public CompactionStrategyManager(ColumnFamilyStore cfs, Supplier<EnumMap<Directories.DirectoryType, DiskBoundaries>> boundariesSupplier,
                                      boolean partitionSSTablesByTokenRange)
     {
         cfs.getTracker().subscribe(this);
@@ -329,7 +332,7 @@ public class CompactionStrategyManager implements INotificationConsumer
             if (!partitionSSTablesByTokenRange)
                 return 0;
 
-            return currentBoundaries.getDiskIndex(sstable);
+            return currentBoundaries.get(Directories.directoryTypeForSSTable(sstable)).getDiskIndex(sstable);
         }
         finally
         {
@@ -462,21 +465,26 @@ public class CompactionStrategyManager implements INotificationConsumer
     @VisibleForTesting
     protected boolean maybeReloadDiskBoundaries()
     {
-        if (!currentBoundaries.isOutOfDate())
-            return false;
+        boolean diskBoundaryChanged = false;
+        for (DiskBoundaries diskBoundaries : currentBoundaries.values())
+        {
+            if (!diskBoundaries.isOutOfDate())
+                continue;
 
-        writeLock.lock();
-        try
-        {
-            if (!currentBoundaries.isOutOfDate())
-                return false;
-            reload(params);
-            return true;
+            writeLock.lock();
+            try
+            {
+                if (!diskBoundaries.isOutOfDate())
+                    continue;
+                reload(params);
+                diskBoundaryChanged = true;
+            }
+            finally
+            {
+                writeLock.unlock();
+            }
         }
-        finally
-        {
-            writeLock.unlock();
-        }
+        return diskBoundaryChanged;
     }
 
     /**
@@ -490,19 +498,28 @@ public class CompactionStrategyManager implements INotificationConsumer
         boolean enabledWithJMX = enabled && !shouldBeEnabled();
         boolean disabledWithJMX = !enabled && shouldBeEnabled();
 
-        if (currentBoundaries != null)
+        if (currentBoundaries.isEmpty() || currentBoundaries.values().stream().anyMatch(d -> d.isOutOfDate()))
         {
-            if (!newCompactionParams.equals(schemaCompactionParams))
-                logger.debug("Recreating compaction strategy - compaction parameters changed for {}.{}", cfs.keyspace.getName(), cfs.getTableName());
-            else if (currentBoundaries.isOutOfDate())
-                logger.debug("Recreating compaction strategy - disk boundaries are out of date for {}.{}.", cfs.keyspace.getName(), cfs.getTableName());
+            currentBoundaries.put(Directories.DirectoryType.STANDARD, boundariesSupplier.get().get(Directories.DirectoryType.STANDARD));
+            currentBoundaries.put(Directories.DirectoryType.ARCHIVE, boundariesSupplier.get().get(Directories.DirectoryType.ARCHIVE));
         }
 
-        if (currentBoundaries == null || currentBoundaries.isOutOfDate())
-            currentBoundaries = boundariesSupplier.get();
+        for (Map.Entry<Directories.DirectoryType, DiskBoundaries> entry : currentBoundaries.entrySet())
+        {
+            Directories.DirectoryType directoryType = entry.getKey();
+            DiskBoundaries diskBoundaries = entry.getValue();
 
-        setStrategy(newCompactionParams);
-        schemaCompactionParams = cfs.metadata().params.compaction;
+            if (diskBoundaries != null)
+            {
+                if (!newCompactionParams.equals(schemaCompactionParams))
+                    logger.debug("Recreating compaction strategy - compaction parameters changed for {}.{}", cfs.keyspace.getName(), cfs.getTableName());
+                else if (diskBoundaries.isOutOfDate())
+                    logger.debug("Recreating compaction strategy - disk boundaries are out of date for {}.{}.", cfs.keyspace.getName(), cfs.getTableName());
+            }
+
+            setStrategy(newCompactionParams);
+            schemaCompactionParams = cfs.metadata().params.compaction;
+        }
 
         if (disabledWithJMX || !shouldBeEnabled() && !enabledWithJMX)
             disable();
@@ -627,7 +644,7 @@ public class CompactionStrategyManager implements INotificationConsumer
         {
             // a bit of gymnastics to be able to replace sstables in compaction strategies
             // we use this to know that a compaction finished and where to start the next compaction in LCS
-            Directories.DataDirectory [] locations = cfs.getDirectories().getWriteableLocations();
+            Directories.DataDirectory [] locations = cfs.getDirectories().getWriteableLocations(Directories.DirectoryType.STANDARD);
             int locationSize = cfs.getPartitioner().splitter().isPresent() ? locations.length : 1;
 
             List<Set<SSTableReader>> pendingRemoved = new ArrayList<>(locationSize);
@@ -1142,11 +1159,14 @@ public class CompactionStrategyManager implements INotificationConsumer
 
         if (partitionSSTablesByTokenRange)
         {
-            for (int i = 0; i < currentBoundaries.directories.size(); i++)
+            for (DiskBoundaries diskBoundaries : currentBoundaries.values())
             {
-                repaired.add(cfs.createCompactionStrategyInstance(params));
-                unrepaired.add(cfs.createCompactionStrategyInstance(params));
-                pendingRepairs.add(new PendingRepairManager(cfs, params));
+                for (int i = 0; i < diskBoundaries.directories.size(); i++)
+                {
+                    repaired.add(cfs.createCompactionStrategyInstance(params));
+                    unrepaired.add(cfs.createCompactionStrategyInstance(params));
+                    pendingRepairs.add(new PendingRepairManager(cfs, params));
+                }
             }
         }
         else
@@ -1154,6 +1174,12 @@ public class CompactionStrategyManager implements INotificationConsumer
             repaired.add(cfs.createCompactionStrategyInstance(params));
             unrepaired.add(cfs.createCompactionStrategyInstance(params));
             pendingRepairs.add(new PendingRepairManager(cfs, params));
+
+            if (currentBoundaries.get(Directories.DirectoryType.ARCHIVE) != null) {
+                repaired.add(cfs.createCompactionStrategyInstance(params));
+                unrepaired.add(cfs.createCompactionStrategyInstance(params));
+                pendingRepairs.add(new PendingRepairManager(cfs, params));
+            }
         }
         this.params = params;
     }
@@ -1178,11 +1204,12 @@ public class CompactionStrategyManager implements INotificationConsumer
                                                        LifecycleTransaction txn)
     {
         maybeReloadDiskBoundaries();
+        Directories.DirectoryType directoryType = Directories.directoryTypeForSSTableDescriptor(descriptor);
         readLock.lock();
         try
         {
             // to avoid creating a compaction strategy for the wrong pending repair manager, we get the index based on where the sstable is to be written
-            int index = partitionSSTablesByTokenRange? currentBoundaries.getBoundariesFromSSTableDirectory(descriptor) : 0;
+            int index = partitionSSTablesByTokenRange? currentBoundaries.get(directoryType).getBoundariesFromSSTableDirectory(descriptor) : 0;
             if (pendingRepair != ActiveRepairService.NO_PENDING_REPAIR)
                 return pendingRepairs.get(index).getOrCreate(pendingRepair).createSSTableMultiWriter(descriptor, keyCount, ActiveRepairService.UNREPAIRED_SSTABLE, pendingRepair, collector, header, indexes, txn);
             else if (repairedAt == ActiveRepairService.UNREPAIRED_SSTABLE)
@@ -1206,7 +1233,7 @@ public class CompactionStrategyManager implements INotificationConsumer
         readLock.lock();
         try
         {
-            Directories.DataDirectory[] locations = cfs.getDirectories().getWriteableLocations();
+            Directories.DataDirectory[] locations = cfs.getDirectories().getWriteableLocations(Directories.DirectoryType.STANDARD);
             if (partitionSSTablesByTokenRange)
             {
                 int unrepairedIndex = unrepaired.indexOf(strategy);

@@ -1803,9 +1803,7 @@ public abstract class SSTableReader extends SSTable implements SelfRefCounted<SS
         if (archiveDirectories == null)
             return false;
 
-        final String directory = descriptor.directory.getAbsolutePath();
-
-        return Arrays.stream(archiveDirectories).anyMatch(dir -> directory.startsWith(FileUtils.getCanonicalPath(dir)));
+        return descriptor.isInArchivingDirectory();
     }
 
     public UUID getPendingRepair()
