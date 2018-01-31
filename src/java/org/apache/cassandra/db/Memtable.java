@@ -300,7 +300,7 @@ public class Memtable implements Comparable<Memtable>
 
     private List<FlushRunnable> createFlushRunnables(LifecycleTransaction txn)
     {
-        DiskBoundaries diskBoundaries = cfs.getDiskBoundaries();
+        DiskBoundaries diskBoundaries = cfs.getDiskBoundaries(Directories.DirectoryType.STANDARD);
         List<PartitionPosition> boundaries = diskBoundaries.positions;
         List<Directories.DataDirectory> locations = diskBoundaries.directories;
         if (boundaries == null)

@@ -36,7 +36,7 @@ public class ArchivingTimeWindowCompactionWriter extends CompactionAwareWriter
                                                final LifecycleTransaction txn, final Set<SSTableReader> nonExpiredSSTables,
                                                boolean keepOriginals, final boolean useArchiveDirectory)
     {
-        super(cfs, directories, txn, nonExpiredSSTables, keepOriginals);
+        super(cfs, directories, txn, nonExpiredSSTables, keepOriginals, useArchiveDirectory);
         long totalSize = cfs.getExpectedCompactedFileSize(txn.originals(), OperationType.COMPACTION);
 
         //This one uses the directory based on whether TWCS has decided it is archive or not

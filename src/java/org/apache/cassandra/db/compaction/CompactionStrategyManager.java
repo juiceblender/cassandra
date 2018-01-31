@@ -110,15 +110,17 @@ public class CompactionStrategyManager implements INotificationConsumer
     private boolean shouldDefragment;
     private boolean supportsEarlyOpen;
     private int fanout;
+    private final Directories.DirectoryType directoryType;
 
-    public CompactionStrategyManager(ColumnFamilyStore cfs)
+
+    public CompactionStrategyManager(ColumnFamilyStore cfs, Directories.DirectoryType directoryType)
     {
-        this(cfs, cfs::getDiskBoundaries, cfs.getPartitioner().splitter().isPresent());
+        this(cfs, () -> cfs.getDiskBoundaries(directoryType), cfs.getPartitioner().splitter().isPresent(), directoryType);
     }
 
     @VisibleForTesting
     public CompactionStrategyManager(ColumnFamilyStore cfs, Supplier<DiskBoundaries> boundariesSupplier,
-                                     boolean partitionSSTablesByTokenRange)
+                                     boolean partitionSSTablesByTokenRange, Directories.DirectoryType directoryType)
     {
         cfs.getTracker().subscribe(this);
         logger.trace("{} subscribed to the data tracker.", this);
@@ -126,6 +128,7 @@ public class CompactionStrategyManager implements INotificationConsumer
         this.compactionLogger = new CompactionLogger(cfs, this);
         this.boundariesSupplier = boundariesSupplier;
         this.partitionSSTablesByTokenRange = partitionSSTablesByTokenRange;
+        this.directoryType = directoryType;
         params = cfs.metadata().params.compaction;
         enabled = params.isEnabled();
         reload(cfs.metadata().params.compaction);
@@ -627,7 +630,7 @@ public class CompactionStrategyManager implements INotificationConsumer
         {
             // a bit of gymnastics to be able to replace sstables in compaction strategies
             // we use this to know that a compaction finished and where to start the next compaction in LCS
-            Directories.DataDirectory [] locations = cfs.getDirectories().getWriteableLocations();
+            Directories.DataDirectory [] locations = cfs.getDirectories().getWriteableLocations(directoryType);
             int locationSize = cfs.getPartitioner().splitter().isPresent() ? locations.length : 1;
 
             List<Set<SSTableReader>> pendingRemoved = new ArrayList<>(locationSize);
@@ -1206,7 +1209,7 @@ public class CompactionStrategyManager implements INotificationConsumer
         readLock.lock();
         try
         {
-            Directories.DataDirectory[] locations = cfs.getDirectories().getWriteableLocations();
+            Directories.DataDirectory[] locations = cfs.getDirectories().getWriteableLocations(directoryType);
             if (partitionSSTablesByTokenRange)
             {
                 int unrepairedIndex = unrepaired.indexOf(strategy);

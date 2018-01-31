@@ -100,7 +100,7 @@ public class Scrubber implements Closeable
 
         List<SSTableReader> toScrub = Collections.singletonList(sstable);
 
-        this.destination = cfs.getDirectories().getLocationForDisk(cfs.getDiskBoundaries().getCorrectDiskForSSTable(sstable));
+        this.destination = cfs.getDirectories().getLocationForDisk(cfs.getDiskBoundaries(Directories.DirectoryType.STANDARD_AND_ARCHIVE).getCorrectDiskForSSTable(sstable));
         this.isCommutative = cfs.metadata().isCounter();
 
         boolean hasIndexFile = (new File(sstable.descriptor.filenameFor(Component.PRIMARY_INDEX))).exists();

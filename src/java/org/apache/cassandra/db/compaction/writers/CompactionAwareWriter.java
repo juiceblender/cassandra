@@ -27,6 +27,7 @@ import java.util.UUID;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import org.apache.cassandra.config.DatabaseDescriptor;
 import org.apache.cassandra.db.ColumnFamilyStore;
 import org.apache.cassandra.db.DecoratedKey;
 import org.apache.cassandra.db.Directories;
@@ -35,6 +36,7 @@ import org.apache.cassandra.db.PartitionPosition;
 import org.apache.cassandra.db.rows.UnfilteredRowIterator;
 import org.apache.cassandra.db.compaction.CompactionTask;
 import org.apache.cassandra.db.lifecycle.LifecycleTransaction;
+import org.apache.cassandra.exceptions.ConfigurationException;
 import org.apache.cassandra.io.sstable.SSTableRewriter;
 import org.apache.cassandra.io.sstable.format.SSTableReader;
 import org.apache.cassandra.utils.FBUtilities;
@@ -63,6 +65,7 @@ public abstract class CompactionAwareWriter extends Transactional.AbstractTransa
     private final List<Directories.DataDirectory> locations;
     private final List<PartitionPosition> diskBoundaries;
     private int locationIndex;
+    private final boolean archiving; //Whether or not this writer is meant to write from hot to cold. This should still be false if it's a compaction within the cold disk
 
     @Deprecated
     public CompactionAwareWriter(ColumnFamilyStore cfs,
@@ -70,16 +73,18 @@ public abstract class CompactionAwareWriter extends Transactional.AbstractTransa
                                  LifecycleTransaction txn,
                                  Set<SSTableReader> nonExpiredSSTables,
                                  boolean offline,
-                                 boolean keepOriginals)
+                                 boolean keepOriginals,
+                                 boolean archiving)
     {
-        this(cfs, directories, txn, nonExpiredSSTables, keepOriginals);
+        this(cfs, directories, txn, nonExpiredSSTables, keepOriginals, archiving);
     }
 
     public CompactionAwareWriter(ColumnFamilyStore cfs,
                                  Directories directories,
                                  LifecycleTransaction txn,
                                  Set<SSTableReader> nonExpiredSSTables,
-                                 boolean keepOriginals)
+                                 boolean keepOriginals,
+                                 boolean archiving)
     {
         this.cfs = cfs;
         this.directories = directories;
@@ -91,7 +96,14 @@ public abstract class CompactionAwareWriter extends Transactional.AbstractTransa
         sstableWriter = SSTableRewriter.construct(cfs, txn, keepOriginals, maxAge);
         minRepairedAt = CompactionTask.getMinRepairedAt(nonExpiredSSTables);
         pendingRepair = CompactionTask.getPendingRepair(nonExpiredSSTables);
-        DiskBoundaries db = cfs.getDiskBoundaries();
+        this.archiving = archiving;
+        DiskBoundaries db;
+        if (archiving)
+        {
+            db = cfs.getDiskBoundaries(Directories.DirectoryType.ARCHIVE);
+        } else {
+            db = cfs.getDiskBoundaries(Directories.DirectoryType.STANDARD);
+        }
         diskBoundaries = db.positions;
         locations = db.directories;
         locationIndex = -1;
@@ -206,30 +218,39 @@ public abstract class CompactionAwareWriter extends Transactional.AbstractTransa
      */
     public Directories.DataDirectory getWriteDirectory(Iterable<SSTableReader> sstables, long estimatedWriteSize)
     {
-        File directory = null;
-        for (SSTableReader sstable : sstables)
+        Directories.DataDirectory d;
+        if (archiving) {
+            if (DatabaseDescriptor.getAllArchiveDataFileLocations() == null)
+                throw new ConfigurationException("There is no archive directory available in the YAML; you have to configure it before being able to make use of archiving cold disks.");
+
+            d = getDirectories().getWriteableLocation(estimatedWriteSize, true);
+        } else
         {
-            if (directory == null)
-                directory = sstable.descriptor.directory;
-            if (!directory.equals(sstable.descriptor.directory))
+            File directory = null;
+            for (SSTableReader sstable : sstables)
             {
-                logger.trace("All sstables not from the same disk - putting results in {}", directory);
-                break;
+                if (directory == null)
+                    directory = sstable.descriptor.directory;
+                if (!directory.equals(sstable.descriptor.directory))
+                {
+                    logger.trace("All sstables not from the same disk - putting results in {}", directory);
+                    break;
+                }
             }
+            d = getDirectories().getDataDirectoryForFile(directory);
+            if (d != null)
+            {
+                long availableSpace = d.getAvailableSpace();
+                if (availableSpace < estimatedWriteSize)
+                    throw new RuntimeException(String.format("Not enough space to write %s to %s (%s available)",
+                                                             FBUtilities.prettyPrintMemory(estimatedWriteSize),
+                                                             d.location,
+                                                             FBUtilities.prettyPrintMemory(availableSpace)));
+                logger.trace("putting compaction results in {}", directory);
+                return d;
+            }
+            d = getDirectories().getWriteableLocation(estimatedWriteSize);
         }
-        Directories.DataDirectory d = getDirectories().getDataDirectoryForFile(directory);
-        if (d != null)
-        {
-            long availableSpace = d.getAvailableSpace();
-            if (availableSpace < estimatedWriteSize)
-                throw new RuntimeException(String.format("Not enough space to write %s to %s (%s available)",
-                                                         FBUtilities.prettyPrintMemory(estimatedWriteSize),
-                                                         d.location,
-                                                         FBUtilities.prettyPrintMemory(availableSpace)));
-            logger.trace("putting compaction results in {}", directory);
-            return d;
-        }
-        d = getDirectories().getWriteableLocation(estimatedWriteSize);
         if (d == null)
             throw new RuntimeException(String.format("Not enough disk space to store %s",
                                                      FBUtilities.prettyPrintMemory(estimatedWriteSize)));

@@ -69,7 +69,7 @@ public class MaxSSTableSizeWriter extends CompactionAwareWriter
                                 int level,
                                 boolean keepOriginals)
     {
-        super(cfs, directories, txn, nonExpiredSSTables, keepOriginals);
+        super(cfs, directories, txn, nonExpiredSSTables, keepOriginals, false);
         this.allSSTables = txn.originals();
         this.level = level;
         this.maxSSTableSize = maxSSTableSize;

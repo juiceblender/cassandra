@@ -175,6 +175,10 @@ public class TimeWindowCompactionStrategy extends AbstractCompactionStrategy
 
         final long now = System.currentTimeMillis() - TimeUnit.MILLISECONDS.convert(options.archiveSSTablesAfterSize, options.archiveSSTablesAfterUnit);
         Set<SSTableReader> uncompacting = ImmutableSet.copyOf(filter(cfs.getUncompactingSSTables(), sstables::contains));
+
+        if (uncompacting.stream().findAny().isPresent() && uncompacting.stream().findAny().get().isInArchivingDirectory())
+            return Collections.emptyList(); //If this TWCS instance is living in the archive directory, it shouldn't try to 'archive' when it's already in the archive
+
         Set<SSTableReader> candidates = Sets.newHashSet(filterSuspectSSTables(uncompacting));
 
         return ImmutableList.copyOf(filter(candidates, candidate -> !candidate.isInArchivingDirectory() && candidate.getMaxTimestamp() < now));

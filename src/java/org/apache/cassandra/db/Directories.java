@@ -41,6 +41,7 @@ import org.apache.cassandra.db.lifecycle.LifecycleTransaction;
 import org.apache.cassandra.io.FSDiskFullWriteError;
 import org.apache.cassandra.io.FSError;
 import org.apache.cassandra.io.FSWriteError;
+import org.apache.cassandra.io.sstable.format.SSTableReader;
 import org.apache.cassandra.io.util.FileUtils;
 import org.apache.cassandra.io.sstable.*;
 import org.apache.cassandra.schema.TableMetadata;
@@ -186,6 +187,12 @@ public class Directories
             }
             return privilege;
         }
+    }
+
+    public enum DirectoryType {
+        ARCHIVE,
+        STANDARD,
+        STANDARD_AND_ARCHIVE
     }
 
     private final TableMetadata metadata;
@@ -385,6 +392,14 @@ public class Directories
         return getWriteableLocation(writeSize, false);
     }
 
+    public static DirectoryType directoryTypeForSSTable(SSTableReader sstable) {
+        return sstable.isInArchivingDirectory() ? DirectoryType.ARCHIVE : DirectoryType.STANDARD;
+    }
+
+    public static DirectoryType directoryTypeForSSTableDescriptor(Descriptor descriptor) {
+        return descriptor.isInArchivingDirectory() ? DirectoryType.ARCHIVE : DirectoryType.STANDARD;
+    }
+
     /**
      * Returns a non-blacklisted data directory that _currently_ has {@code writeSize} bytes as usable space, null if
      * there is not enough space left in all directories.
@@ -480,10 +495,14 @@ public class Directories
         return totalAvailable > expectedTotalWriteSize;
     }
 
-    public DataDirectory[] getWriteableLocations()
+    public DataDirectory[] getWriteableLocations(DirectoryType directoryType)
     {
         List<DataDirectory> nonBlacklistedDirs = new ArrayList<>();
-        for (DataDirectory dir : paths)
+        DataDirectory[] dataDirectories = directoryType == DirectoryType.ARCHIVE ? archiveDataDirectories :
+                                          directoryType == DirectoryType.STANDARD ? standardDataDirectories :
+                                          paths;
+
+        for (DataDirectory dir : dataDirectories)
         {
             if (!BlacklistedDirectories.isUnwritable(dir.location))
                 nonBlacklistedDirs.add(dir);

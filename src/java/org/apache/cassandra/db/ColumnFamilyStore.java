@@ -206,6 +206,7 @@ public class ColumnFamilyStore implements ColumnFamilyStoreMBean
     private volatile DefaultValue<Double> crcCheckChance;
 
     private final CompactionStrategyManager compactionStrategyManager;
+    private final CompactionStrategyManager archiveCompactionStrategyManager;
 
     private final Directories directories;
 
@@ -216,7 +217,9 @@ public class ColumnFamilyStore implements ColumnFamilyStoreMBean
     private volatile boolean compactionSpaceCheck = true;
 
     @VisibleForTesting
-    final DiskBoundaryManager diskBoundaryManager = new DiskBoundaryManager();
+    final DiskBoundaryManager diskBoundaryManager = new DiskBoundaryManager(Directories.DirectoryType.STANDARD);
+
+    final DiskBoundaryManager archiveDiskBoundaryManager = new DiskBoundaryManager(Directories.DirectoryType.ARCHIVE); //Find some way to instantiate this only if it's actually valid
 
     public static void shutdownPostFlushExecutor() throws InterruptedException
     {
@@ -400,7 +403,8 @@ public class ColumnFamilyStore implements ColumnFamilyStoreMBean
         }
 
         // compaction strategy should be created after the CFS has been prepared
-        compactionStrategyManager = new CompactionStrategyManager(this);
+        compactionStrategyManager = new CompactionStrategyManager(this, Directories.DirectoryType.STANDARD);
+        archiveCompactionStrategyManager = new CompactionStrategyManager(this, Directories.DirectoryType.ARCHIVE);
 
         if (maxCompactionThreshold.value() <= 0 || minCompactionThreshold.value() <=0)
         {
@@ -2627,13 +2631,13 @@ public class ColumnFamilyStore implements ColumnFamilyStoreMBean
         return getIfExists(tableId).metric;
     }
 
-    public DiskBoundaries getDiskBoundaries()
-    {
-        return diskBoundaryManager.getDiskBoundaries(this);
+    public DiskBoundaries getDiskBoundaries(Directories.DirectoryType directoryType) {
+        return directoryType == Directories.DirectoryType.STANDARD ? diskBoundaryManager.getDiskBoundaries(this) : archiveDiskBoundaryManager.getDiskBoundaries(this);
     }
 
     public void invalidateDiskBoundaries()
     {
         diskBoundaryManager.invalidate();
+        archiveDiskBoundaryManager.invalidate();
     }
 }

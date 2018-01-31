@@ -27,11 +27,13 @@ import com.google.common.annotations.VisibleForTesting;
 import com.google.common.base.Objects;
 import com.google.common.base.Splitter;
 
+import org.apache.cassandra.config.DatabaseDescriptor;
 import org.apache.cassandra.db.Directories;
 import org.apache.cassandra.io.sstable.format.SSTableFormat;
 import org.apache.cassandra.io.sstable.format.Version;
 import org.apache.cassandra.io.sstable.metadata.IMetadataSerializer;
 import org.apache.cassandra.io.sstable.metadata.MetadataSerializer;
+import org.apache.cassandra.io.util.FileUtils;
 import org.apache.cassandra.utils.Pair;
 
 import static org.apache.cassandra.io.sstable.Component.separator;
@@ -164,6 +166,15 @@ public class Descriptor
     {
         String filename = file.getName();
         return filename.endsWith(".db") && !LEGACY_TMP_REGEX.matcher(filename).matches();
+    }
+
+    public boolean isInArchivingDirectory() {
+        final String[] archiveDirectories = DatabaseDescriptor.getAllArchiveDataFileLocations();
+
+        if (archiveDirectories == null)
+            return false;
+
+        return Arrays.stream(archiveDirectories).anyMatch(dir -> directory.getAbsolutePath().startsWith(FileUtils.getCanonicalPath(dir)));
     }
 
     /**

@@ -532,7 +532,7 @@ public class CompactionManager implements CompactionManagerMBean
             return AllSSTableOpStatus.ABORTED;
         }
 
-        final DiskBoundaries diskBoundaries = cfs.getDiskBoundaries();
+        final DiskBoundaries diskBoundaries = cfs.getDiskBoundaries(Directories.DirectoryType.STANDARD);
 
         return parallelAllSSTableOperation(cfs, new OneSSTableOperation()
         {
