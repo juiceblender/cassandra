@@ -22,14 +22,17 @@ import java.io.IOException;
 import java.util.*;
 import java.util.concurrent.Callable;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
+import java.util.function.Function;
 import java.util.function.Supplier;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
 import com.google.common.annotations.VisibleForTesting;
+import com.google.common.base.Functions;
 import com.google.common.collect.Iterables;
 import com.google.common.collect.Lists;
 
+import org.apache.cassandra.config.DatabaseDescriptor;
 import org.apache.cassandra.db.DiskBoundaries;
 import org.apache.cassandra.index.Index;
 
@@ -91,12 +94,15 @@ public class CompactionStrategyManager implements INotificationConsumer
     /**
      * Variables guarded by read and write lock above
      */
-    private final List<AbstractCompactionStrategy> repaired = new ArrayList<>();
-    private final List<AbstractCompactionStrategy> unrepaired = new ArrayList<>();
-    private final List<PendingRepairManager> pendingRepairs = new ArrayList<>();
+    private final Map<Directories.DirectoryType, List<AbstractCompactionStrategy>> repaired = new HashMap<>();
+    private final Map<Directories.DirectoryType, List<AbstractCompactionStrategy>> unrepaired = new HashMap<>();
+    private final Map<Directories.DirectoryType, List<PendingRepairManager>> pendingRepairs = new HashMap<>();
     private volatile CompactionParams params;
     private EnumMap<Directories.DirectoryType, DiskBoundaries> currentBoundaries = new EnumMap<>(Directories.DirectoryType.class);
+
+    //Whether autocompactions are enabled or not
     private volatile boolean enabled = true;
+    //Whether the CSM is currently running (set to false when user decides to cancel in progress compactions)
     private volatile boolean isActive = true;
 
     /*
@@ -142,7 +148,25 @@ public class CompactionStrategyManager implements INotificationConsumer
      */
     public AbstractCompactionTask getNextBackgroundTask(int gcBefore)
     {
+        AbstractCompactionTask task = getNextBackgroundTask(gcBefore, Directories.DirectoryType.STANDARD);
+
+        //Ideally you would check whether TWCS has that option enabled...but then it is protected in the package so not visible.
+        //One other option is to create another function isArchivingEnabled(cfs) which checks whether it's TWCS and whether archiveunits == -1, which is public.
+        if (task == null && DatabaseDescriptor.getAllArchiveDataFileLocations() != null)
+            task = getNextBackgroundTask(gcBefore, Directories.DirectoryType.ARCHIVE);
+
+        return task;
+    }
+
+    /*
+    Always try to generate compaction tasks from the standard (hot) directory first. Then only generate from the cold.
+     */
+    public AbstractCompactionTask getNextBackgroundTask(int gcBefore, Directories.DirectoryType directoryType) {
         maybeReloadDiskBoundaries();
+        List<PendingRepairManager> pendingRepairsForDirectoryType = pendingRepairs.get(directoryType);
+        List<AbstractCompactionStrategy> repairedForDirectoryType = repaired.get(directoryType);
+        List<AbstractCompactionStrategy> unrepairedForDirectoryType = unrepaired.get(directoryType);
+
         readLock.lock();
         try
         {
@@ -150,8 +174,8 @@ public class CompactionStrategyManager implements INotificationConsumer
                 return null;
 
             // first try to promote/demote sstables from completed repairs
-            ArrayList<Pair<Integer, PendingRepairManager>> pendingRepairManagers = new ArrayList<>(pendingRepairs.size());
-            for (PendingRepairManager pendingRepair : pendingRepairs)
+            ArrayList<Pair<Integer, PendingRepairManager>> pendingRepairManagers = new ArrayList<>(pendingRepairsForDirectoryType.size());
+            for (PendingRepairManager pendingRepair : pendingRepairsForDirectoryType)
             {
                 int numPending = pendingRepair.getNumPendingRepairFinishedTasks();
                 if (numPending > 0)
@@ -173,15 +197,15 @@ public class CompactionStrategyManager implements INotificationConsumer
             }
 
             // sort compaction task suppliers by remaining tasks descending
-            ArrayList<Pair<Integer, Supplier<AbstractCompactionTask>>> sortedSuppliers = new ArrayList<>(repaired.size() + unrepaired.size() + 1);
+            ArrayList<Pair<Integer, Supplier<AbstractCompactionTask>>> sortedSuppliers = new ArrayList<>(repairedForDirectoryType.size() + unrepairedForDirectoryType.size() + 1);
 
-            for (AbstractCompactionStrategy strategy : repaired)
+            for (AbstractCompactionStrategy strategy : repairedForDirectoryType)
                 sortedSuppliers.add(Pair.create(strategy.getEstimatedRemainingTasks(), () -> strategy.getNextBackgroundTask(gcBefore)));
 
-            for (AbstractCompactionStrategy strategy : unrepaired)
+            for (AbstractCompactionStrategy strategy : unrepairedForDirectoryType)
                 sortedSuppliers.add(Pair.create(strategy.getEstimatedRemainingTasks(), () -> strategy.getNextBackgroundTask(gcBefore)));
 
-            for (PendingRepairManager pending : pendingRepairs)
+            for (PendingRepairManager pending : pendingRepairsForDirectoryType)
                 sortedSuppliers.add(Pair.create(pending.getMaxEstimatedRemainingTasks(), () -> pending.getNextBackgroundTask(gcBefore)));
 
             sortedSuppliers.sort((x, y) -> y.left - x.left);
@@ -257,21 +281,21 @@ public class CompactionStrategyManager implements INotificationConsumer
                 if (sstable.openReason != SSTableReader.OpenReason.EARLY)
                     compactionStrategyFor(sstable).addSSTable(sstable);
             }
-            repaired.forEach(AbstractCompactionStrategy::startup);
-            unrepaired.forEach(AbstractCompactionStrategy::startup);
-            pendingRepairs.forEach(PendingRepairManager::startup);
-            shouldDefragment = repaired.get(0).shouldDefragment();
-            supportsEarlyOpen = repaired.get(0).supportsEarlyOpen();
-            fanout = (repaired.get(0) instanceof LeveledCompactionStrategy) ? ((LeveledCompactionStrategy) repaired.get(0)).getLevelFanoutSize() : LeveledCompactionStrategy.DEFAULT_LEVEL_FANOUT_SIZE;
+            repaired.forEach((dt, cs) -> cs.forEach(AbstractCompactionStrategy::startup));
+            unrepaired.forEach((dt, cs) -> cs.forEach(AbstractCompactionStrategy::startup));
+            pendingRepairs.forEach((dt, cs) -> cs.forEach(PendingRepairManager::startup));
+            shouldDefragment = repaired.get(Directories.DirectoryType.STANDARD).get(0).shouldDefragment();
+            supportsEarlyOpen = repaired.get(Directories.DirectoryType.STANDARD).get(0).supportsEarlyOpen();
+            fanout = (repaired.get(Directories.DirectoryType.STANDARD).get(0) instanceof LeveledCompactionStrategy) ? ((LeveledCompactionStrategy) repaired.get(0)).getLevelFanoutSize() : LeveledCompactionStrategy.DEFAULT_LEVEL_FANOUT_SIZE;
         }
         finally
         {
             writeLock.unlock();
         }
-        repaired.forEach(AbstractCompactionStrategy::startup);
-        unrepaired.forEach(AbstractCompactionStrategy::startup);
-        pendingRepairs.forEach(PendingRepairManager::startup);
-        if (Stream.concat(repaired.stream(), unrepaired.stream()).anyMatch(cs -> cs.logAll))
+        repaired.forEach((dt, cs) -> cs.forEach(AbstractCompactionStrategy::startup));
+        unrepaired.forEach((dt, cs) -> cs.forEach(AbstractCompactionStrategy::startup));
+        pendingRepairs.forEach((dt, cs) -> cs.forEach(PendingRepairManager::startup));
+        if (Stream.concat(repaired.values().stream(), unrepaired.values().stream()).anyMatch(locs -> locs.stream().anyMatch(cs -> cs.logAll)))
             compactionLogger.enable();
     }
 
@@ -296,12 +320,13 @@ public class CompactionStrategyManager implements INotificationConsumer
         try
         {
             int index = compactionStrategyIndexFor(sstable);
+            Directories.DirectoryType directoryType = Directories.directoryTypeForSSTable(sstable);
             if (sstable.isPendingRepair())
-                return pendingRepairs.get(index).getOrCreate(sstable);
+                return pendingRepairs.get(directoryType).get(index).getOrCreate(sstable);
             else if (sstable.isRepaired())
-                return repaired.get(index);
+                return repaired.get(directoryType).get(index);
             else
-                return unrepaired.get(index);
+                return unrepaired.get(directoryType).get(index);
         }
         finally
         {
@@ -341,12 +366,12 @@ public class CompactionStrategyManager implements INotificationConsumer
     }
 
     @VisibleForTesting
-    List<AbstractCompactionStrategy> getRepaired()
+    List<AbstractCompactionStrategy> getRepaired(Directories.DirectoryType directoryType)
     {
         readLock.lock();
         try
         {
-            return Lists.newArrayList(repaired);
+            return Lists.newArrayList(repaired.get(directoryType));
         }
         finally
         {
@@ -355,12 +380,12 @@ public class CompactionStrategyManager implements INotificationConsumer
     }
 
     @VisibleForTesting
-    List<AbstractCompactionStrategy> getUnrepaired()
+    List<AbstractCompactionStrategy> getUnrepaired(Directories.DirectoryType directoryType)
     {
         readLock.lock();
         try
         {
-            return Lists.newArrayList(unrepaired);
+            return Lists.newArrayList(unrepaired.get(directoryType));
         }
         finally
         {
@@ -375,7 +400,7 @@ public class CompactionStrategyManager implements INotificationConsumer
         try
         {
             List<AbstractCompactionStrategy> strategies = new ArrayList<>(pendingRepairs.size());
-            pendingRepairs.forEach(p -> strategies.add(p.get(sessionID)));
+            pendingRepairs.values().stream().flatMap(Collection::stream).forEach(p -> strategies.add(p.get(sessionID))));
             return strategies;
         }
         finally
@@ -391,7 +416,7 @@ public class CompactionStrategyManager implements INotificationConsumer
         try
         {
             Set<UUID> ids = new HashSet<>();
-            pendingRepairs.forEach(p -> ids.addAll(p.getSessions()));
+            pendingRepairs.values().stream().flatMap(Collection::stream).forEach(p -> ids.addAll(p.getSessions()));
             return ids;
         }
         finally
@@ -405,7 +430,7 @@ public class CompactionStrategyManager implements INotificationConsumer
         readLock.lock();
         try
         {
-            return Iterables.any(pendingRepairs, prm -> prm.hasDataForSession(sessionID));
+            return Iterables.any(pendingRepairs.values().stream().flatMap(Collection::stream).collect(Collectors.toSet()), prm -> prm.hasDataForSession(sessionID));
         }
         finally
         {
@@ -419,9 +444,9 @@ public class CompactionStrategyManager implements INotificationConsumer
         try
         {
             isActive = false;
-            repaired.forEach(AbstractCompactionStrategy::shutdown);
-            unrepaired.forEach(AbstractCompactionStrategy::shutdown);
-            pendingRepairs.forEach(PendingRepairManager::shutdown);
+            repaired.values().stream().flatMap(Collection::stream).forEach(AbstractCompactionStrategy::shutdown);
+            unrepaired.values().stream().flatMap(Collection::stream).forEach(AbstractCompactionStrategy::shutdown);
+            pendingRepairs.values().stream().flatMap(Collection::stream).forEach(PendingRepairManager::shutdown);
             compactionLogger.disable();
         }
         finally
@@ -534,16 +559,19 @@ public class CompactionStrategyManager implements INotificationConsumer
         readLock.lock();
         try
         {
-            if (repaired.get(0) instanceof LeveledCompactionStrategy && unrepaired.get(0) instanceof LeveledCompactionStrategy)
+            if (repaired.get(Directories.DirectoryType.STANDARD).get(0) instanceof LeveledCompactionStrategy && unrepaired.get(Directories.DirectoryType.STANDARD).get(0) instanceof LeveledCompactionStrategy)
             {
                 int count = 0;
-                for (AbstractCompactionStrategy strategy : repaired)
-                    count += ((LeveledCompactionStrategy) strategy).getLevelSize(0);
-                for (AbstractCompactionStrategy strategy : unrepaired)
-                    count += ((LeveledCompactionStrategy) strategy).getLevelSize(0);
-                for (PendingRepairManager pendingManager : pendingRepairs)
-                    for (AbstractCompactionStrategy strategy : pendingManager.getStrategies())
+                for (Directories.DirectoryType directoryType : Directories.DirectoryType.values())
+                {
+                    for (AbstractCompactionStrategy strategy : repaired.get(directoryType))
                         count += ((LeveledCompactionStrategy) strategy).getLevelSize(0);
+                    for (AbstractCompactionStrategy strategy : unrepaired.get(directoryType))
+                        count += ((LeveledCompactionStrategy) strategy).getLevelSize(0);
+                    for (PendingRepairManager pendingManager : pendingRepairs.get(directoryType))
+                        for (AbstractCompactionStrategy strategy : pendingManager.getStrategies())
+                            count += ((LeveledCompactionStrategy) strategy).getLevelSize(0);
+                }
                 return count;
             }
         }
@@ -565,23 +593,26 @@ public class CompactionStrategyManager implements INotificationConsumer
         readLock.lock();
         try
         {
-            if (repaired.get(0) instanceof LeveledCompactionStrategy && unrepaired.get(0) instanceof LeveledCompactionStrategy)
+            if (repaired.get(Directories.DirectoryType.STANDARD).get(0) instanceof LeveledCompactionStrategy && unrepaired.get(Directories.DirectoryType.STANDARD).get(0) instanceof LeveledCompactionStrategy)
             {
                 int[] res = new int[LeveledManifest.MAX_LEVEL_COUNT];
-                for (AbstractCompactionStrategy strategy : repaired)
+                for (Directories.DirectoryType directoryType : Directories.DirectoryType.values())
                 {
-                    int[] repairedCountPerLevel = ((LeveledCompactionStrategy) strategy).getAllLevelSize();
-                    res = sumArrays(res, repairedCountPerLevel);
-                }
-                for (AbstractCompactionStrategy strategy : unrepaired)
-                {
-                    int[] unrepairedCountPerLevel = ((LeveledCompactionStrategy) strategy).getAllLevelSize();
-                    res = sumArrays(res, unrepairedCountPerLevel);
-                }
-                for (PendingRepairManager pending : pendingRepairs)
-                {
-                    int[] pendingRepairCountPerLevel = pending.getSSTableCountPerLevel();
-                    res = sumArrays(res, pendingRepairCountPerLevel);
+                    for (AbstractCompactionStrategy strategy : repaired.get(directoryType))
+                    {
+                        int[] repairedCountPerLevel = ((LeveledCompactionStrategy) strategy).getAllLevelSize();
+                        res = sumArrays(res, repairedCountPerLevel);
+                    }
+                    for (AbstractCompactionStrategy strategy : unrepaired.get(directoryType))
+                    {
+                        int[] unrepairedCountPerLevel = ((LeveledCompactionStrategy) strategy).getAllLevelSize();
+                        res = sumArrays(res, unrepairedCountPerLevel);
+                    }
+                    for (PendingRepairManager pending : pendingRepairs.get(directoryType))
+                    {
+                        int[] pendingRepairCountPerLevel = pending.getSSTableCountPerLevel();
+                        res = sumArrays(res, pendingRepairCountPerLevel);
+                    }
                 }
                 return res;
             }

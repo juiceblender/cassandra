@@ -31,6 +31,7 @@ import org.junit.Ignore;
 
 import org.apache.cassandra.SchemaLoader;
 import org.apache.cassandra.cql3.statements.CreateTableStatement;
+import org.apache.cassandra.db.Directories;
 import org.apache.cassandra.schema.TableMetadata;
 import org.apache.cassandra.schema.Schema;
 import org.apache.cassandra.cql3.QueryProcessor;
@@ -109,8 +110,8 @@ public class AbstractPendingRepairTest extends AbstractRepairTest
         SSTableReader sstable = diff.iterator().next();
         if (orphan)
         {
-            Iterables.any(csm.getUnrepaired(), s -> s.getSSTables().contains(sstable));
-            csm.getUnrepaired().forEach(s -> s.removeSSTable(sstable));
+            Iterables.any(csm.getUnrepaired(Directories.DirectoryType.STANDARD), s -> s.getSSTables().contains(sstable));
+            csm.getUnrepaired(Directories.DirectoryType.STANDARD).forEach(s -> s.removeSSTable(sstable));
         }
         return sstable;
     }

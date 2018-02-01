@@ -27,6 +27,7 @@ import com.google.common.collect.Iterables;
 import org.junit.Assert;
 import org.junit.Test;
 
+import org.apache.cassandra.db.Directories;
 import org.apache.cassandra.io.sstable.format.SSTableReader;
 import org.apache.cassandra.notifications.SSTableAddedNotification;
 import org.apache.cassandra.notifications.SSTableDeletingNotification;
@@ -59,12 +60,12 @@ public class CompactionStrategyManagerPendingRepairTest extends AbstractPendingR
 
     private boolean repairedContains(SSTableReader sstable)
     {
-        return strategiesContain(csm.getRepaired(), sstable);
+        return strategiesContain(csm.getRepaired(Directories.DirectoryType.STANDARD), sstable);
     }
 
     private boolean unrepairedContains(SSTableReader sstable)
     {
-        return strategiesContain(csm.getUnrepaired(), sstable);
+        return strategiesContain(csm.getUnrepaired(Directories.DirectoryType.STANDARD), sstable);
     }
 
     /**
