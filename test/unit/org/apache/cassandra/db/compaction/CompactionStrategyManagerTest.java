@@ -137,11 +137,9 @@ public class CompactionStrategyManagerTest
 
         MockBoundaryManager mockBoundaryManager = new MockBoundaryManager(cfs, boundaries);
         System.out.println("Boundaries for " + numDisks + " disks is " + Arrays.toString(boundaries));
-        CompactionStrategyManager csm = new CompactionStrategyManager(cfs, () -> {
-            return new EnumMap<Directories.DirectoryType, DiskBoundaries>(Directories.DirectoryType.class) {{
-                put(Directories.DirectoryType.STANDARD, mockBoundaryManager.getBoundaries());
-            }};
-        },
+        CompactionStrategyManager csm = new CompactionStrategyManager(cfs, () -> new EnumMap<Directories.DirectoryType, DiskBoundaries>(Directories.DirectoryType.class) {{
+            put(Directories.DirectoryType.STANDARD, mockBoundaryManager.getBoundaries());
+        }},
                                                                       true);
 
         // Check that SSTables are assigned to the correct Compaction Strategy

@@ -19,40 +19,54 @@ package org.apache.cassandra.db.compaction;
 
 
 import java.io.IOException;
-import java.util.*;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Collection;
+import java.util.Collections;
+import java.util.ConcurrentModificationException;
+import java.util.EnumMap;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.Iterator;
+import java.util.List;
+import java.util.Map;
+import java.util.Objects;
+import java.util.Set;
+import java.util.UUID;
 import java.util.concurrent.Callable;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
-import java.util.function.Function;
 import java.util.function.Supplier;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
 import com.google.common.annotations.VisibleForTesting;
-import com.google.common.base.Functions;
 import com.google.common.collect.Iterables;
 import com.google.common.collect.Lists;
-
-import org.apache.cassandra.config.DatabaseDescriptor;
-import org.apache.cassandra.db.DiskBoundaries;
-import org.apache.cassandra.index.Index;
-
+import org.apache.commons.lang3.ArrayUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import org.apache.cassandra.config.DatabaseDescriptor;
 import org.apache.cassandra.db.ColumnFamilyStore;
 import org.apache.cassandra.db.Directories;
-import org.apache.cassandra.db.Memtable;
+import org.apache.cassandra.db.DiskBoundaries;
 import org.apache.cassandra.db.SerializationHeader;
 import org.apache.cassandra.db.lifecycle.LifecycleTransaction;
 import org.apache.cassandra.db.lifecycle.SSTableSet;
 import org.apache.cassandra.dht.Range;
 import org.apache.cassandra.dht.Token;
+import org.apache.cassandra.index.Index;
 import org.apache.cassandra.io.sstable.Descriptor;
+import org.apache.cassandra.io.sstable.ISSTableScanner;
 import org.apache.cassandra.io.sstable.SSTableMultiWriter;
 import org.apache.cassandra.io.sstable.format.SSTableReader;
-import org.apache.cassandra.io.sstable.ISSTableScanner;
 import org.apache.cassandra.io.sstable.metadata.MetadataCollector;
-import org.apache.cassandra.notifications.*;
+import org.apache.cassandra.notifications.INotification;
+import org.apache.cassandra.notifications.INotificationConsumer;
+import org.apache.cassandra.notifications.SSTableAddedNotification;
+import org.apache.cassandra.notifications.SSTableDeletingNotification;
+import org.apache.cassandra.notifications.SSTableListChangedNotification;
+import org.apache.cassandra.notifications.SSTableRepairStatusChanged;
 import org.apache.cassandra.schema.CompactionParams;
 import org.apache.cassandra.schema.TableMetadata;
 import org.apache.cassandra.service.ActiveRepairService;
@@ -98,7 +112,7 @@ public class CompactionStrategyManager implements INotificationConsumer
     private final Map<Directories.DirectoryType, List<AbstractCompactionStrategy>> unrepaired = new HashMap<>();
     private final Map<Directories.DirectoryType, List<PendingRepairManager>> pendingRepairs = new HashMap<>();
     private volatile CompactionParams params;
-    private EnumMap<Directories.DirectoryType, DiskBoundaries> currentBoundaries = new EnumMap<>(Directories.DirectoryType.class);
+    private final EnumMap<Directories.DirectoryType, DiskBoundaries> currentBoundaries = new EnumMap<>(Directories.DirectoryType.class);
 
     //Whether autocompactions are enabled or not
     private volatile boolean enabled = true;
@@ -121,7 +135,9 @@ public class CompactionStrategyManager implements INotificationConsumer
     {
         this(cfs, () -> new EnumMap<Directories.DirectoryType, DiskBoundaries>(Directories.DirectoryType.class){{
             put(Directories.DirectoryType.STANDARD, cfs.getDiskBoundaries(Directories.DirectoryType.STANDARD));
-            put(Directories.DirectoryType.ARCHIVE, cfs.getDiskBoundaries(Directories.DirectoryType.ARCHIVE));
+
+            if (DatabaseDescriptor.getAllArchiveDataFileLocations() != null)
+                put(Directories.DirectoryType.ARCHIVE, cfs.getDiskBoundaries(Directories.DirectoryType.ARCHIVE));
         }}, cfs.getPartitioner().splitter().isPresent());
     }
 
@@ -286,7 +302,9 @@ public class CompactionStrategyManager implements INotificationConsumer
             pendingRepairs.forEach((dt, cs) -> cs.forEach(PendingRepairManager::startup));
             shouldDefragment = repaired.get(Directories.DirectoryType.STANDARD).get(0).shouldDefragment();
             supportsEarlyOpen = repaired.get(Directories.DirectoryType.STANDARD).get(0).supportsEarlyOpen();
-            fanout = (repaired.get(Directories.DirectoryType.STANDARD).get(0) instanceof LeveledCompactionStrategy) ? ((LeveledCompactionStrategy) repaired.get(0)).getLevelFanoutSize() : LeveledCompactionStrategy.DEFAULT_LEVEL_FANOUT_SIZE;
+            fanout = (repaired.get(Directories.DirectoryType.STANDARD).get(0) instanceof LeveledCompactionStrategy) ?
+                     ((LeveledCompactionStrategy) repaired.get(Directories.DirectoryType.STANDARD).get(0)).getLevelFanoutSize() :
+                     LeveledCompactionStrategy.DEFAULT_LEVEL_FANOUT_SIZE;
         }
         finally
         {
@@ -400,7 +418,7 @@ public class CompactionStrategyManager implements INotificationConsumer
         try
         {
             List<AbstractCompactionStrategy> strategies = new ArrayList<>(pendingRepairs.size());
-            pendingRepairs.values().stream().flatMap(Collection::stream).forEach(p -> strategies.add(p.get(sessionID))));
+            pendingRepairs.values().stream().flatMap(Collection::stream).forEach(p -> strategies.add(p.get(sessionID)));
             return strategies;
         }
         finally
@@ -493,20 +511,23 @@ public class CompactionStrategyManager implements INotificationConsumer
         boolean diskBoundaryChanged = false;
         for (DiskBoundaries diskBoundaries : currentBoundaries.values())
         {
-            if (!diskBoundaries.isOutOfDate())
-                continue;
-
-            writeLock.lock();
-            try
+            if (diskBoundaries != null)
             {
                 if (!diskBoundaries.isOutOfDate())
                     continue;
-                reload(params);
-                diskBoundaryChanged = true;
-            }
-            finally
-            {
-                writeLock.unlock();
+
+                writeLock.lock();
+                try
+                {
+                    if (!diskBoundaries.isOutOfDate())
+                        continue;
+                    reload(params);
+                    diskBoundaryChanged = true;
+                }
+                finally
+                {
+                    writeLock.unlock();
+                }
             }
         }
         return diskBoundaryChanged;
@@ -523,28 +544,26 @@ public class CompactionStrategyManager implements INotificationConsumer
         boolean enabledWithJMX = enabled && !shouldBeEnabled();
         boolean disabledWithJMX = !enabled && shouldBeEnabled();
 
-        if (currentBoundaries.isEmpty() || currentBoundaries.values().stream().anyMatch(d -> d.isOutOfDate()))
+        if (currentBoundaries.isEmpty() || currentBoundaries.values().stream().filter(Objects::nonNull).anyMatch(DiskBoundaries::isOutOfDate))
         {
             currentBoundaries.put(Directories.DirectoryType.STANDARD, boundariesSupplier.get().get(Directories.DirectoryType.STANDARD));
-            currentBoundaries.put(Directories.DirectoryType.ARCHIVE, boundariesSupplier.get().get(Directories.DirectoryType.ARCHIVE));
+
+            if (DatabaseDescriptor.getAllArchiveDataFileLocations() != null )
+                currentBoundaries.put(Directories.DirectoryType.ARCHIVE, boundariesSupplier.get().get(Directories.DirectoryType.ARCHIVE));
         }
 
-        for (Map.Entry<Directories.DirectoryType, DiskBoundaries> entry : currentBoundaries.entrySet())
+        DiskBoundaries diskBoundaries = currentBoundaries.get(Directories.DirectoryType.STANDARD);
+
+        if (diskBoundaries != null)
         {
-            Directories.DirectoryType directoryType = entry.getKey();
-            DiskBoundaries diskBoundaries = entry.getValue();
-
-            if (diskBoundaries != null)
-            {
-                if (!newCompactionParams.equals(schemaCompactionParams))
-                    logger.debug("Recreating compaction strategy - compaction parameters changed for {}.{}", cfs.keyspace.getName(), cfs.getTableName());
-                else if (diskBoundaries.isOutOfDate())
-                    logger.debug("Recreating compaction strategy - disk boundaries are out of date for {}.{}.", cfs.keyspace.getName(), cfs.getTableName());
-            }
-
-            setStrategy(newCompactionParams);
-            schemaCompactionParams = cfs.metadata().params.compaction;
+            if (!newCompactionParams.equals(schemaCompactionParams))
+                logger.debug("Recreating compaction strategy - compaction parameters changed for {}.{}", cfs.keyspace.getName(), cfs.getTableName());
+            else if (diskBoundaries.isOutOfDate())
+                logger.debug("Recreating compaction strategy - disk boundaries are out of date for {}.{}.", cfs.keyspace.getName(), cfs.getTableName());
         }
+
+        setStrategy(newCompactionParams);
+        schemaCompactionParams = cfs.metadata().params.compaction;
 
         if (disabledWithJMX || !shouldBeEnabled() && !enabledWithJMX)
             disable();
@@ -663,19 +682,21 @@ public class CompactionStrategyManager implements INotificationConsumer
         }
     }
 
+    //Used when CF is invalidated, or when SSTables are reloaded(?)
+    //Not sure if added and removed can ever be from different directories
     private void handleListChangedNotification(Iterable<SSTableReader> added, Iterable<SSTableReader> removed)
     {
         // If reloaded, SSTables will be placed in their correct locations
         // so there is no need to process notification
         if (maybeReloadDiskBoundaries())
             return;
-
+        final Directories.DirectoryType directoryType = Directories.directoryTypeForSSTable(added.iterator().next());
         readLock.lock();
         try
         {
             // a bit of gymnastics to be able to replace sstables in compaction strategies
             // we use this to know that a compaction finished and where to start the next compaction in LCS
-            Directories.DataDirectory [] locations = cfs.getDirectories().getWriteableLocations(Directories.DirectoryType.STANDARD);
+            Directories.DataDirectory[] locations = cfs.getDirectories().getWriteableLocations(directoryType);
             int locationSize = cfs.getPartitioner().splitter().isPresent() ? locations.length : 1;
 
             List<Set<SSTableReader>> pendingRemoved = new ArrayList<>(locationSize);
@@ -715,28 +736,29 @@ public class CompactionStrategyManager implements INotificationConsumer
                 else
                     unrepairedAdded.get(i).add(sstable);
             }
+
             for (int i = 0; i < locationSize; i++)
             {
 
                 if (!pendingRemoved.get(i).isEmpty())
                 {
-                    pendingRepairs.get(i).replaceSSTables(pendingRemoved.get(i), pendingAdded.get(i));
+                    pendingRepairs.get(directoryType).get(i).replaceSSTables(pendingRemoved.get(i), pendingAdded.get(i));
                 }
                 else
                 {
-                    PendingRepairManager pendingManager = pendingRepairs.get(i);
-                    pendingAdded.get(i).forEach(s -> pendingManager.addSSTable(s));
+                    PendingRepairManager pendingManager = pendingRepairs.get(directoryType).get(i);
+                    pendingAdded.get(i).forEach(pendingManager::addSSTable);
                 }
 
                 if (!repairedRemoved.get(i).isEmpty())
-                    repaired.get(i).replaceSSTables(repairedRemoved.get(i), repairedAdded.get(i));
+                    repaired.get(directoryType).get(i).replaceSSTables(repairedRemoved.get(i), repairedAdded.get(i));
                 else
-                    repaired.get(i).addSSTables(repairedAdded.get(i));
+                    repaired.get(directoryType).get(i).addSSTables(repairedAdded.get(i));
 
                 if (!unrepairedRemoved.get(i).isEmpty())
-                    unrepaired.get(i).replaceSSTables(unrepairedRemoved.get(i), unrepairedAdded.get(i));
+                    unrepaired.get(directoryType).get(i).replaceSSTables(unrepairedRemoved.get(i), unrepairedAdded.get(i));
                 else
-                    unrepaired.get(i).addSSTables(unrepairedAdded.get(i));
+                    unrepaired.get(directoryType).get(i).addSSTables(unrepairedAdded.get(i));
             }
         }
         finally
@@ -751,6 +773,8 @@ public class CompactionStrategyManager implements INotificationConsumer
         // so there is no need to process notification
         if (maybeReloadDiskBoundaries())
             return;
+
+        final Directories.DirectoryType directoryType = Directories.directoryTypeForSSTable(sstables.iterator().next());
         // we need a write lock here since we move sstables from one strategy instance to another
         readLock.lock();
         try
@@ -760,21 +784,21 @@ public class CompactionStrategyManager implements INotificationConsumer
                 int index = compactionStrategyIndexFor(sstable);
                 if (sstable.isPendingRepair())
                 {
-                    pendingRepairs.get(index).addSSTable(sstable);
-                    unrepaired.get(index).removeSSTable(sstable);
-                    repaired.get(index).removeSSTable(sstable);
+                    pendingRepairs.get(directoryType).get(index).addSSTable(sstable);
+                    unrepaired.get(directoryType).get(index).removeSSTable(sstable);
+                    repaired.get(directoryType).get(index).removeSSTable(sstable);
                 }
                 else if (sstable.isRepaired())
                 {
-                    pendingRepairs.get(index).removeSSTable(sstable);
-                    unrepaired.get(index).removeSSTable(sstable);
-                    repaired.get(index).addSSTable(sstable);
+                    pendingRepairs.get(directoryType).get(index).removeSSTable(sstable);
+                    unrepaired.get(directoryType).get(index).removeSSTable(sstable);
+                    repaired.get(directoryType).get(index).addSSTable(sstable);
                 }
                 else
                 {
-                    pendingRepairs.get(index).removeSSTable(sstable);
-                    repaired.get(index).removeSSTable(sstable);
-                    unrepaired.get(index).addSSTable(sstable);
+                    pendingRepairs.get(directoryType).get(index).removeSSTable(sstable);
+                    repaired.get(directoryType).get(index).removeSSTable(sstable);
+                    unrepaired.get(directoryType).get(index).addSSTable(sstable);
                 }
             }
         }
@@ -861,8 +885,9 @@ public class CompactionStrategyManager implements INotificationConsumer
     public AbstractCompactionStrategy.ScannerList maybeGetScanners(Collection<SSTableReader> sstables,  Collection<Range<Token>> ranges)
     {
         maybeReloadDiskBoundaries();
-        readLock.lock();
         List<ISSTableScanner> scanners = new ArrayList<>(sstables.size());
+        final Directories.DirectoryType directoryType = Directories.directoryTypeForSSTable(sstables.iterator().next());
+        readLock.lock();
         try
         {
             assert repaired.size() == unrepaired.size();
@@ -894,17 +919,17 @@ public class CompactionStrategyManager implements INotificationConsumer
             for (int i = 0; i < pendingSSTables.size(); i++)
             {
                 if (!pendingSSTables.get(i).isEmpty())
-                    scanners.addAll(pendingRepairs.get(i).getScanners(pendingSSTables.get(i), ranges));
+                    scanners.addAll(pendingRepairs.get(directoryType).get(i).getScanners(pendingSSTables.get(i), ranges));
             }
             for (int i = 0; i < repairedSSTables.size(); i++)
             {
                 if (!repairedSSTables.get(i).isEmpty())
-                    scanners.addAll(repaired.get(i).getScanners(repairedSSTables.get(i), ranges).scanners);
+                    scanners.addAll(repaired.get(directoryType).get(i).getScanners(repairedSSTables.get(i), ranges).scanners);
             }
             for (int i = 0; i < unrepairedSSTables.size(); i++)
             {
                 if (!unrepairedSSTables.get(i).isEmpty())
-                    scanners.addAll(unrepaired.get(i).getScanners(unrepairedSSTables.get(i), ranges).scanners);
+                    scanners.addAll(unrepaired.get(directoryType).get(i).getScanners(unrepairedSSTables.get(i), ranges).scanners);
             }
         }
         catch (PendingRepairManager.IllegalSSTableArgumentException e)
@@ -941,14 +966,15 @@ public class CompactionStrategyManager implements INotificationConsumer
     public Collection<Collection<SSTableReader>> groupSSTablesForAntiCompaction(Collection<SSTableReader> sstablesToGroup)
     {
         maybeReloadDiskBoundaries();
+        final Directories.DirectoryType directoryType = Directories.directoryTypeForSSTable(sstablesToGroup.iterator().next());
         readLock.lock();
         try
         {
-            Map<Integer, List<SSTableReader>> groups = sstablesToGroup.stream().collect(Collectors.groupingBy((s) -> compactionStrategyIndexFor(s)));
+            Map<Integer, List<SSTableReader>> groups = sstablesToGroup.stream().collect(Collectors.groupingBy(this::compactionStrategyIndexFor));
             Collection<Collection<SSTableReader>> anticompactionGroups = new ArrayList<>();
 
             for (Map.Entry<Integer, List<SSTableReader>> group : groups.entrySet())
-                anticompactionGroups.addAll(unrepaired.get(group.getKey()).groupSSTablesForAntiCompaction(group.getValue()));
+                anticompactionGroups.addAll(unrepaired.get(directoryType).get(group.getKey()).groupSSTablesForAntiCompaction(group.getValue()));
             return anticompactionGroups;
         }
         finally
@@ -957,12 +983,13 @@ public class CompactionStrategyManager implements INotificationConsumer
         }
     }
 
-    public long getMaxSSTableBytes()
+    //FIXME Check this.
+    public long getMaxSSTableBytes(Directories.DirectoryType directoryType)
     {
         readLock.lock();
         try
         {
-            return unrepaired.get(0).getMaxSSTableBytes();
+            return unrepaired.get(directoryType).get(0).getMaxSSTableBytes();
         }
         finally
         {
@@ -1013,6 +1040,7 @@ public class CompactionStrategyManager implements INotificationConsumer
         }
     }
 
+    //FIXME what happens when performing a major compaction, should we compact all or parameterize.
     public Collection<AbstractCompactionTask> getMaximalTasks(final int gcBefore, final boolean splitOutput)
     {
         maybeReloadDiskBoundaries();
@@ -1028,20 +1056,20 @@ public class CompactionStrategyManager implements INotificationConsumer
                 readLock.lock();
                 try
                 {
-                    for (AbstractCompactionStrategy strategy : repaired)
+                    for (AbstractCompactionStrategy strategy : repaired.get(Directories.DirectoryType.STANDARD))
                     {
                         Collection<AbstractCompactionTask> task = strategy.getMaximalTask(gcBefore, splitOutput);
                         if (task != null)
                             tasks.addAll(task);
                     }
-                    for (AbstractCompactionStrategy strategy : unrepaired)
+                    for (AbstractCompactionStrategy strategy : unrepaired.get(Directories.DirectoryType.STANDARD))
                     {
                         Collection<AbstractCompactionTask> task = strategy.getMaximalTask(gcBefore, splitOutput);
                         if (task != null)
                             tasks.addAll(task);
                     }
 
-                    for (PendingRepairManager pending : pendingRepairs)
+                    for (PendingRepairManager pending : pendingRepairs.get(Directories.DirectoryType.STANDARD))
                     {
                         Collection<AbstractCompactionTask> pendingRepairTasks = pending.getMaximalTasks(gcBefore, splitOutput);
                         if (pendingRepairTasks != null)
@@ -1072,29 +1100,30 @@ public class CompactionStrategyManager implements INotificationConsumer
     {
         maybeReloadDiskBoundaries();
         List<AbstractCompactionTask> ret = new ArrayList<>();
+        Directories.DirectoryType directoryType = Directories.directoryTypeForSSTable(sstables.iterator().next());
         readLock.lock();
         try
         {
             Map<Integer, List<SSTableReader>> repairedSSTables = sstables.stream()
                                                                          .filter(s -> !s.isMarkedSuspect() && s.isRepaired() && !s.isPendingRepair())
-                                                                         .collect(Collectors.groupingBy((s) -> compactionStrategyIndexFor(s)));
+                                                                         .collect(Collectors.groupingBy(this::compactionStrategyIndexFor));
 
             Map<Integer, List<SSTableReader>> unrepairedSSTables = sstables.stream()
                                                                            .filter(s -> !s.isMarkedSuspect() && !s.isRepaired() && !s.isPendingRepair())
-                                                                           .collect(Collectors.groupingBy((s) -> compactionStrategyIndexFor(s)));
+                                                                           .collect(Collectors.groupingBy(this::compactionStrategyIndexFor));
 
             Map<Integer, List<SSTableReader>> pendingSSTables = sstables.stream()
                                                                         .filter(s -> !s.isMarkedSuspect() && s.isPendingRepair())
-                                                                        .collect(Collectors.groupingBy((s) -> compactionStrategyIndexFor(s)));
+                                                                        .collect(Collectors.groupingBy(this::compactionStrategyIndexFor));
 
             for (Map.Entry<Integer, List<SSTableReader>> group : repairedSSTables.entrySet())
-                ret.add(repaired.get(group.getKey()).getUserDefinedTask(group.getValue(), gcBefore));
+                ret.add(repaired.get(directoryType).get(group.getKey()).getUserDefinedTask(group.getValue(), gcBefore));
 
             for (Map.Entry<Integer, List<SSTableReader>> group : unrepairedSSTables.entrySet())
-                ret.add(unrepaired.get(group.getKey()).getUserDefinedTask(group.getValue(), gcBefore));
+                ret.add(unrepaired.get(directoryType).get(group.getKey()).getUserDefinedTask(group.getValue(), gcBefore));
 
             for (Map.Entry<Integer, List<SSTableReader>> group : pendingSSTables.entrySet())
-                ret.addAll(pendingRepairs.get(group.getKey()).createUserDefinedTasks(group.getValue(), gcBefore));
+                ret.addAll(pendingRepairs.get(directoryType).get(group.getKey()).createUserDefinedTasks(group.getValue(), gcBefore));
 
             return ret;
         }
@@ -1111,12 +1140,15 @@ public class CompactionStrategyManager implements INotificationConsumer
         readLock.lock();
         try
         {
-            for (AbstractCompactionStrategy strategy : repaired)
-                tasks += strategy.getEstimatedRemainingTasks();
-            for (AbstractCompactionStrategy strategy : unrepaired)
-                tasks += strategy.getEstimatedRemainingTasks();
-            for (PendingRepairManager pending : pendingRepairs)
-                tasks += pending.getEstimatedRemainingTasks();
+            for (Directories.DirectoryType directoryType : Directories.DirectoryType.values())
+            {
+                for (AbstractCompactionStrategy strategy : repaired.get(directoryType))
+                    tasks += strategy.getEstimatedRemainingTasks();
+                for (AbstractCompactionStrategy strategy : unrepaired.get(directoryType))
+                    tasks += strategy.getEstimatedRemainingTasks();
+                for (PendingRepairManager pending : pendingRepairs.get(directoryType))
+                    tasks += pending.getEstimatedRemainingTasks();
+            }
         }
         finally
         {
@@ -1136,7 +1168,7 @@ public class CompactionStrategyManager implements INotificationConsumer
         readLock.lock();
         try
         {
-            return unrepaired.get(0).getName();
+            return unrepaired.get(Directories.DirectoryType.STANDARD).get(0).getName();
         }
         finally
         {
@@ -1151,8 +1183,9 @@ public class CompactionStrategyManager implements INotificationConsumer
         try
         {
             List<AbstractCompactionStrategy> pending = new ArrayList<>();
-            pendingRepairs.forEach(p -> pending.addAll(p.getStrategies()));
-            return Arrays.asList(repaired, unrepaired, pending);
+            pendingRepairs.values().stream().flatMap(Collection::stream).forEach(p -> pending.addAll(p.getStrategies()));
+            return Arrays.asList(repaired.values().stream().flatMap(Collection::stream).collect(Collectors.toList()),
+                                 unrepaired.values().stream().flatMap(Collection::stream).collect(Collectors.toList()), pending);
         }
         finally
         {
@@ -1181,35 +1214,49 @@ public class CompactionStrategyManager implements INotificationConsumer
 
     private void setStrategy(CompactionParams params)
     {
-        repaired.forEach(AbstractCompactionStrategy::shutdown);
-        unrepaired.forEach(AbstractCompactionStrategy::shutdown);
-        pendingRepairs.forEach(PendingRepairManager::shutdown);
+        repaired.values().stream().flatMap(Collection::stream).forEach(AbstractCompactionStrategy::shutdown);
+        unrepaired.values().stream().flatMap(Collection::stream).forEach(AbstractCompactionStrategy::shutdown);
+        pendingRepairs.values().stream().flatMap(Collection::stream).forEach(PendingRepairManager::shutdown);
+
         repaired.clear();
         unrepaired.clear();
         pendingRepairs.clear();
 
+        repaired.put(Directories.DirectoryType.STANDARD, new ArrayList<>());
+        unrepaired.put(Directories.DirectoryType.STANDARD, new ArrayList<>());
+        pendingRepairs.put(Directories.DirectoryType.STANDARD, new ArrayList<>());
+
+        if (DatabaseDescriptor.getAllArchiveDataFileLocations() != null)
+            repaired.put(Directories.DirectoryType.ARCHIVE, new ArrayList<>());
+            unrepaired.put(Directories.DirectoryType.ARCHIVE, new ArrayList<>());
+            pendingRepairs.put(Directories.DirectoryType.ARCHIVE, new ArrayList<>());
+
         if (partitionSSTablesByTokenRange)
         {
-            for (DiskBoundaries diskBoundaries : currentBoundaries.values())
+            for (Directories.DirectoryType directoryType : Directories.DirectoryType.values())
             {
-                for (int i = 0; i < diskBoundaries.directories.size(); i++)
+                DiskBoundaries diskBoundaries = currentBoundaries.get(directoryType);
+                if (diskBoundaries != null)
                 {
-                    repaired.add(cfs.createCompactionStrategyInstance(params));
-                    unrepaired.add(cfs.createCompactionStrategyInstance(params));
-                    pendingRepairs.add(new PendingRepairManager(cfs, params));
+                    for (int i = 0; i < diskBoundaries.directories.size(); i++)
+                    {
+                        repaired.get(directoryType).add(cfs.createCompactionStrategyInstance(params));
+                        unrepaired.get(directoryType).add(cfs.createCompactionStrategyInstance(params));
+                        pendingRepairs.get(directoryType).add(new PendingRepairManager(cfs, params));
+                    }
                 }
             }
         }
         else
         {
-            repaired.add(cfs.createCompactionStrategyInstance(params));
-            unrepaired.add(cfs.createCompactionStrategyInstance(params));
-            pendingRepairs.add(new PendingRepairManager(cfs, params));
+            repaired.get(Directories.DirectoryType.STANDARD).add(cfs.createCompactionStrategyInstance(params));
+            unrepaired.get(Directories.DirectoryType.STANDARD).add(cfs.createCompactionStrategyInstance(params));
+            pendingRepairs.get(Directories.DirectoryType.STANDARD).add(new PendingRepairManager(cfs, params));
 
             if (currentBoundaries.get(Directories.DirectoryType.ARCHIVE) != null) {
-                repaired.add(cfs.createCompactionStrategyInstance(params));
-                unrepaired.add(cfs.createCompactionStrategyInstance(params));
-                pendingRepairs.add(new PendingRepairManager(cfs, params));
+                repaired.get(Directories.DirectoryType.ARCHIVE).add(cfs.createCompactionStrategyInstance(params));
+                unrepaired.get(Directories.DirectoryType.ARCHIVE).add(cfs.createCompactionStrategyInstance(params));
+                pendingRepairs.get(Directories.DirectoryType.ARCHIVE).add(new PendingRepairManager(cfs, params));
             }
         }
         this.params = params;
@@ -1242,11 +1289,11 @@ public class CompactionStrategyManager implements INotificationConsumer
             // to avoid creating a compaction strategy for the wrong pending repair manager, we get the index based on where the sstable is to be written
             int index = partitionSSTablesByTokenRange? currentBoundaries.get(directoryType).getBoundariesFromSSTableDirectory(descriptor) : 0;
             if (pendingRepair != ActiveRepairService.NO_PENDING_REPAIR)
-                return pendingRepairs.get(index).getOrCreate(pendingRepair).createSSTableMultiWriter(descriptor, keyCount, ActiveRepairService.UNREPAIRED_SSTABLE, pendingRepair, collector, header, indexes, txn);
+                return pendingRepairs.get(directoryType).get(index).getOrCreate(pendingRepair).createSSTableMultiWriter(descriptor, keyCount, ActiveRepairService.UNREPAIRED_SSTABLE, pendingRepair, collector, header, indexes, txn);
             else if (repairedAt == ActiveRepairService.UNREPAIRED_SSTABLE)
-                return unrepaired.get(index).createSSTableMultiWriter(descriptor, keyCount, repairedAt, ActiveRepairService.NO_PENDING_REPAIR, collector, header, indexes, txn);
+                return unrepaired.get(directoryType).get(index).createSSTableMultiWriter(descriptor, keyCount, repairedAt, ActiveRepairService.NO_PENDING_REPAIR, collector, header, indexes, txn);
             else
-                return repaired.get(index).createSSTableMultiWriter(descriptor, keyCount, repairedAt, ActiveRepairService.NO_PENDING_REPAIR, collector, header, indexes, txn);
+                return repaired.get(directoryType).get(index).createSSTableMultiWriter(descriptor, keyCount, repairedAt, ActiveRepairService.NO_PENDING_REPAIR, collector, header, indexes, txn);
         }
         finally
         {
@@ -1256,38 +1303,49 @@ public class CompactionStrategyManager implements INotificationConsumer
 
     public boolean isRepaired(AbstractCompactionStrategy strategy)
     {
-        return repaired.contains(strategy);
+        return repaired.get(Directories.DirectoryType.STANDARD).contains(strategy);
     }
 
+    //FIXME Check this.
     public List<String> getStrategyFolders(AbstractCompactionStrategy strategy)
     {
         readLock.lock();
         try
         {
             Directories.DataDirectory[] locations = cfs.getDirectories().getWriteableLocations(Directories.DirectoryType.STANDARD);
+            Directories.DataDirectory[] archiveLocations = cfs.getDirectories().getWriteableLocations(Directories.DirectoryType.ARCHIVE);
             if (partitionSSTablesByTokenRange)
             {
-                int unrepairedIndex = unrepaired.indexOf(strategy);
+                int unrepairedIndex = unrepaired.get(Directories.DirectoryType.STANDARD).indexOf(strategy);
                 if (unrepairedIndex > 0)
                 {
+                    if (archiveLocations.length != 0)
+                        return Arrays.asList(locations[unrepairedIndex].location.getAbsolutePath(), archiveLocations[unrepairedIndex].location.getAbsolutePath());
+
                     return Collections.singletonList(locations[unrepairedIndex].location.getAbsolutePath());
                 }
-                int repairedIndex = repaired.indexOf(strategy);
+                int repairedIndex = repaired.get(Directories.DirectoryType.STANDARD).indexOf(strategy);
                 if (repairedIndex > 0)
                 {
+                    if (archiveLocations.length != 0)
+                        return Arrays.asList(locations[repairedIndex].location.getAbsolutePath(), archiveLocations[repairedIndex].location.getAbsolutePath());
+
                     return Collections.singletonList(locations[repairedIndex].location.getAbsolutePath());
                 }
-                for (int i = 0; i < pendingRepairs.size(); i++)
+                for (int i = 0; i < pendingRepairs.get(Directories.DirectoryType.STANDARD).size(); i++)
                 {
-                    PendingRepairManager pending = pendingRepairs.get(i);
+                    PendingRepairManager pending = pendingRepairs.get(Directories.DirectoryType.STANDARD).get(i);
                     if (pending.hasStrategy(strategy))
                     {
+                        if (archiveLocations.length != 0)
+                            return Arrays.asList(locations[i].location.getAbsolutePath(), archiveLocations[i].location.getAbsolutePath());
+
                         return Collections.singletonList(locations[i].location.getAbsolutePath());
                     }
                 }
             }
-            List<String> folders = new ArrayList<>(locations.length);
-            for (Directories.DataDirectory location : locations)
+            List<String> folders = new ArrayList<>(locations.length + archiveLocations.length);
+            for (Directories.DataDirectory location : ArrayUtils.addAll(locations, archiveLocations))
             {
                 folders.add(location.location.getAbsolutePath());
             }
@@ -1311,7 +1369,7 @@ public class CompactionStrategyManager implements INotificationConsumer
         readLock.lock();
         try
         {
-            return pendingRepairs;
+            return pendingRepairs.get(Directories.DirectoryType.STANDARD);
         }
         finally
         {

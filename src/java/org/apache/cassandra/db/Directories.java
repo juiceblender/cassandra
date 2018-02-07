@@ -191,22 +191,26 @@ public class Directories
 
     public enum DirectoryType {
         ARCHIVE,
-        STANDARD,
-        STANDARD_AND_ARCHIVE
+        STANDARD
     }
 
     private final TableMetadata metadata;
     private final DataDirectory[] paths;
+    private final DataDirectory[] archivePaths;
     private final File[] dataPaths;
 
     public Directories(final TableMetadata metadata)
     {
-        this(metadata, dataDirectories);
+        this(metadata, dataDirectories, archiveDataDirectories);
     }
 
     public Directories(final TableMetadata metadata, Collection<DataDirectory> paths)
     {
-        this(metadata, paths.toArray(new DataDirectory[paths.size()]));
+        this(metadata, paths.toArray(new DataDirectory[paths.size()]), archiveDataDirectories);
+    }
+
+    public Directories(final TableMetadata metadata, DataDirectory[] paths) {
+        this(metadata, paths, archiveDataDirectories);
     }
 
     /**
@@ -215,10 +219,11 @@ public class Directories
      *
      * @param metadata metadata of ColumnFamily
      */
-    public Directories(final TableMetadata metadata, DataDirectory[] paths)
+    public Directories(final TableMetadata metadata, DataDirectory[] paths, DataDirectory[] archivepaths)
     {
         this.metadata = metadata;
         this.paths = paths;
+        this.archivePaths = archivepaths;
 
         String tableId = metadata.id.toHexString();
         int idx = metadata.name.indexOf(SECONDARY_INDEX_NAME_SEPARATOR);
@@ -498,8 +503,7 @@ public class Directories
     public DataDirectory[] getWriteableLocations(DirectoryType directoryType)
     {
         List<DataDirectory> nonBlacklistedDirs = new ArrayList<>();
-        DataDirectory[] dataDirectories = directoryType == DirectoryType.ARCHIVE ? archiveDataDirectories :
-                                          directoryType == DirectoryType.STANDARD ? standardDataDirectories :
+        DataDirectory[] dataDirectories = directoryType == DirectoryType.ARCHIVE ? archivePaths :
                                           paths;
 
         for (DataDirectory dir : dataDirectories)
