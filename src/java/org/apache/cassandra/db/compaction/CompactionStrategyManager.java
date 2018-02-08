@@ -41,6 +41,7 @@ import java.util.stream.Stream;
 
 import com.google.common.annotations.VisibleForTesting;
 import com.google.common.collect.Iterables;
+import com.google.common.collect.Iterators;
 import com.google.common.collect.Lists;
 import org.apache.commons.lang3.ArrayUtils;
 import org.slf4j.Logger;
@@ -418,7 +419,12 @@ public class CompactionStrategyManager implements INotificationConsumer
         try
         {
             List<AbstractCompactionStrategy> strategies = new ArrayList<>(pendingRepairs.size());
-            pendingRepairs.values().stream().flatMap(Collection::stream).forEach(p -> strategies.add(p.get(sessionID)));
+            pendingRepairs.values().stream().flatMap(Collection::stream).forEach(p -> {
+                AbstractCompactionStrategy abstractCompactionStrategy = p.get(sessionID);
+
+                if (abstractCompactionStrategy != null)
+                    strategies.add(abstractCompactionStrategy);
+            });
             return strategies;
         }
         finally
@@ -690,7 +696,15 @@ public class CompactionStrategyManager implements INotificationConsumer
         // so there is no need to process notification
         if (maybeReloadDiskBoundaries())
             return;
-        final Directories.DirectoryType directoryType = Directories.directoryTypeForSSTable(added.iterator().next());
+
+        final Directories.DirectoryType directoryType;
+        if (Iterables.size(added) != 0)
+            directoryType = Directories.directoryTypeForSSTable(added.iterator().next());
+        else if (Iterables.size(removed) != 0)
+            directoryType = Directories.directoryTypeForSSTable(removed.iterator().next());
+        else
+            return;
+
         readLock.lock();
         try
         {
@@ -769,6 +783,9 @@ public class CompactionStrategyManager implements INotificationConsumer
 
     private void handleRepairStatusChangedNotification(Iterable<SSTableReader> sstables)
     {
+        if (Iterables.size(sstables) == 0)
+            return;
+
         // If reloaded, SSTables will be placed in their correct locations
         // so there is no need to process notification
         if (maybeReloadDiskBoundaries())
@@ -886,6 +903,10 @@ public class CompactionStrategyManager implements INotificationConsumer
     {
         maybeReloadDiskBoundaries();
         List<ISSTableScanner> scanners = new ArrayList<>(sstables.size());
+
+        if (sstables.size() == 0)
+            return new AbstractCompactionStrategy.ScannerList(scanners);
+
         final Directories.DirectoryType directoryType = Directories.directoryTypeForSSTable(sstables.iterator().next());
         readLock.lock();
         try
@@ -983,13 +1004,12 @@ public class CompactionStrategyManager implements INotificationConsumer
         }
     }
 
-    //FIXME Check this.
-    public long getMaxSSTableBytes(Directories.DirectoryType directoryType)
+    public long getMaxSSTableBytes()
     {
         readLock.lock();
         try
         {
-            return unrepaired.get(directoryType).get(0).getMaxSSTableBytes();
+            return unrepaired.get(Directories.DirectoryType.STANDARD).get(0).getMaxSSTableBytes();
         }
         finally
         {

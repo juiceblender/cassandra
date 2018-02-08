@@ -138,7 +138,8 @@ public class CompactionStrategyManagerTest
         MockBoundaryManager mockBoundaryManager = new MockBoundaryManager(cfs, boundaries);
         System.out.println("Boundaries for " + numDisks + " disks is " + Arrays.toString(boundaries));
         CompactionStrategyManager csm = new CompactionStrategyManager(cfs, () -> new EnumMap<Directories.DirectoryType, DiskBoundaries>(Directories.DirectoryType.class) {{
-            put(Directories.DirectoryType.STANDARD, mockBoundaryManager.getBoundaries());
+            put(Directories.DirectoryType.STANDARD, mockBoundaryManager.getBoundaries(Directories.DirectoryType.STANDARD));
+            put(Directories.DirectoryType.ARCHIVE, mockBoundaryManager.getBoundaries(Directories.DirectoryType.ARCHIVE));
         }},
                                                                       true);
 
@@ -260,31 +261,34 @@ public class CompactionStrategyManagerTest
     {
         private final ColumnFamilyStore cfs;
         private Integer[] positions;
-        private DiskBoundaries boundaries;
+        private EnumMap<Directories.DirectoryType, DiskBoundaries> boundaries;
 
         public MockBoundaryManager(ColumnFamilyStore cfs, Integer[] positions)
         {
             this.cfs = cfs;
             this.positions = positions;
-            this.boundaries = createDiskBoundaries(cfs, positions);
+            this.boundaries = new EnumMap<Directories.DirectoryType, DiskBoundaries>(Directories.DirectoryType.class) {{
+                put(Directories.DirectoryType.STANDARD, createDiskBoundaries(cfs, positions, Directories.DirectoryType.STANDARD));
+                put(Directories.DirectoryType.ARCHIVE, createDiskBoundaries(cfs, positions, Directories.DirectoryType.ARCHIVE));
+            }};
         }
 
         public void invalidateBoundaries()
         {
-            boundaries.invalidate();
+            boundaries.values().forEach(DiskBoundaries::invalidate);
         }
 
-        public DiskBoundaries getBoundaries()
+        public DiskBoundaries getBoundaries(Directories.DirectoryType directoryType)
         {
-            if (boundaries.isOutOfDate())
-                boundaries = createDiskBoundaries(cfs, positions);
-            return boundaries;
+            if (boundaries.get(directoryType).isOutOfDate())
+                boundaries.put(directoryType, createDiskBoundaries(cfs, positions, directoryType));
+            return boundaries.get(directoryType);
         }
 
-        private DiskBoundaries createDiskBoundaries(ColumnFamilyStore cfs, Integer[] boundaries)
+        private DiskBoundaries createDiskBoundaries(ColumnFamilyStore cfs, Integer[] boundaries, Directories.DirectoryType directoryType)
         {
             List<PartitionPosition> positions = Arrays.stream(boundaries).map(b -> Util.token(String.format(String.format("%04d", b))).minKeyBound()).collect(Collectors.toList());
-            return new DiskBoundaries(cfs.getDirectories().getWriteableLocations(Directories.DirectoryType.STANDARD), positions, 0, 0);
+            return new DiskBoundaries(cfs.getDirectories().getWriteableLocations(directoryType), positions, 0, 0);
         }
     }
 
