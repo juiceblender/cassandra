@@ -31,6 +31,7 @@ import org.apache.cassandra.SchemaLoader;
 import org.apache.cassandra.Util;
 import org.apache.cassandra.db.ColumnFamilyStore;
 import org.apache.cassandra.db.DecoratedKey;
+import org.apache.cassandra.db.Directories;
 import org.apache.cassandra.db.Keyspace;
 import org.apache.cassandra.db.RowUpdateBuilder;
 import org.apache.cassandra.db.lifecycle.LifecycleTransaction;
@@ -107,7 +108,7 @@ public class AbstractCompactionStrategyTest
     public void testGetNextBackgroundTaskDoesNotBlock(String table)
     {
         ColumnFamilyStore cfs = Keyspace.open(KEYSPACE1).getColumnFamilyStore(table);
-        AbstractCompactionStrategy strategy = cfs.getCompactionStrategyManager().getStrategies().get(1).get(0);
+        AbstractCompactionStrategy strategy = cfs.getCompactionStrategyManager().getStrategies(Directories.DirectoryType.STANDARD).get(1).get(0);
 
         // Add 4 sstables
         for (int i = 1; i <= 4; i++)

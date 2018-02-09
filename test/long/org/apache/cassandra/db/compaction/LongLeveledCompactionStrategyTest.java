@@ -71,7 +71,7 @@ public class LongLeveledCompactionStrategyTest
         ColumnFamilyStore store = keyspace.getColumnFamilyStore(cfname);
         store.disableAutoCompaction();
         CompactionStrategyManager mgr = store.getCompactionStrategyManager();
-        LeveledCompactionStrategy lcs = (LeveledCompactionStrategy) mgr.getStrategies().get(1).get(0);
+        LeveledCompactionStrategy lcs = (LeveledCompactionStrategy) mgr.getStrategies(Directories.DirectoryType.STANDARD).get(1).get(0);
 
         ByteBuffer value = ByteBuffer.wrap(new byte[100 * 1024]); // 100 KB value, make it easy to have multiple files
 
@@ -172,7 +172,7 @@ public class LongLeveledCompactionStrategyTest
         LeveledCompactionStrategyTest.waitForLeveling(store);
         store.disableAutoCompaction();
         CompactionStrategyManager mgr = store.getCompactionStrategyManager();
-        LeveledCompactionStrategy lcs = (LeveledCompactionStrategy) mgr.getStrategies().get(1).get(0);
+        LeveledCompactionStrategy lcs = (LeveledCompactionStrategy) mgr.getStrategies(Directories.DirectoryType.STANDARD).get(1).get(0);
 
         value = ByteBuffer.wrap(new byte[10 * 1024]); // 10 KB value
 

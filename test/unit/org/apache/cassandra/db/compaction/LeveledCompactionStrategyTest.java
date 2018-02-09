@@ -43,6 +43,7 @@ import org.apache.cassandra.Util;
 import org.apache.cassandra.UpdateBuilder;
 import org.apache.cassandra.db.ColumnFamilyStore;
 import org.apache.cassandra.db.DecoratedKey;
+import org.apache.cassandra.db.Directories;
 import org.apache.cassandra.db.Keyspace;
 import org.apache.cassandra.dht.Range;
 import org.apache.cassandra.dht.Token;
@@ -220,7 +221,7 @@ public class LeveledCompactionStrategyTest
             // so it should be good enough
             boolean allL0Empty = true;
             boolean anyL1NonEmpty = false;
-            for (List<AbstractCompactionStrategy> strategies : strategyManager.getStrategies())
+            for (List<AbstractCompactionStrategy> strategies : strategyManager.getStrategies(Directories.DirectoryType.STANDARD))
             {
                 for (AbstractCompactionStrategy strategy : strategies)
                 {
@@ -259,7 +260,7 @@ public class LeveledCompactionStrategyTest
         }
 
         waitForLeveling(cfs);
-        LeveledCompactionStrategy strategy = (LeveledCompactionStrategy) cfs.getCompactionStrategyManager().getStrategies().get(1).get(0);
+        LeveledCompactionStrategy strategy = (LeveledCompactionStrategy) cfs.getCompactionStrategyManager().getStrategies(Directories.DirectoryType.STANDARD).get(1).get(0);
         assert strategy.getLevelSize(1) > 0;
 
         // get LeveledScanner for level 1 sstables
@@ -295,7 +296,7 @@ public class LeveledCompactionStrategyTest
             cfs.forceBlockingFlush();
         }
         cfs.forceBlockingFlush();
-        LeveledCompactionStrategy strategy = (LeveledCompactionStrategy) cfs.getCompactionStrategyManager().getStrategies().get(1).get(0);
+        LeveledCompactionStrategy strategy = (LeveledCompactionStrategy) cfs.getCompactionStrategyManager().getStrategies(Directories.DirectoryType.STANDARD).get(1).get(0);
         cfs.forceMajorCompaction();
 
         for (SSTableReader s : cfs.getLiveSSTables())
@@ -342,7 +343,7 @@ public class LeveledCompactionStrategyTest
             Thread.sleep(100);
 
         CompactionStrategyManager manager = cfs.getCompactionStrategyManager();
-        List<List<AbstractCompactionStrategy>> strategies = manager.getStrategies();
+        List<List<AbstractCompactionStrategy>> strategies = manager.getStrategies(Directories.DirectoryType.STANDARD);
         LeveledCompactionStrategy repaired = (LeveledCompactionStrategy) strategies.get(0).get(0);
         LeveledCompactionStrategy unrepaired = (LeveledCompactionStrategy) strategies.get(1).get(0);
         assertEquals(0, repaired.manifest.getLevelCount() );

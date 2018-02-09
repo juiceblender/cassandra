@@ -38,6 +38,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import org.apache.cassandra.db.ColumnFamilyStore;
+import org.apache.cassandra.db.Directories;
 import org.apache.cassandra.io.sstable.format.SSTableReader;
 import org.apache.cassandra.utils.NoSpamLogger;
 import org.codehaus.jackson.JsonNode;
@@ -121,7 +122,9 @@ public class CompactionLogger
         CompactionStrategyManager csm = csmRef.get();
         if (csm == null)
             return;
-        csm.getStrategies()
+        csm.getStrategies(Directories.DirectoryType.STANDARD)
+           .forEach(l -> l.forEach(consumer));
+        csm.getStrategies(Directories.DirectoryType.ARCHIVE)
            .forEach(l -> l.forEach(consumer));
     }
 

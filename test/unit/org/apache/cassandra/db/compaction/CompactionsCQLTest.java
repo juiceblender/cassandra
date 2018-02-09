@@ -25,6 +25,7 @@ import org.junit.Test;
 
 import org.apache.cassandra.cql3.CQLTester;
 import org.apache.cassandra.cql3.UntypedResultSet;
+import org.apache.cassandra.db.Directories;
 
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
@@ -229,7 +230,7 @@ public class CompactionsCQLTest extends CQLTester
     public boolean verifyStrategies(CompactionStrategyManager manager, Class<? extends AbstractCompactionStrategy> expected)
     {
         boolean found = false;
-        for (List<AbstractCompactionStrategy> strategies : manager.getStrategies())
+        for (List<AbstractCompactionStrategy> strategies : manager.getStrategies(Directories.DirectoryType.STANDARD))
         {
             if (!strategies.stream().allMatch((strategy) -> strategy.getClass().equals(expected)))
                 return false;

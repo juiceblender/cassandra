@@ -1196,16 +1196,16 @@ public class CompactionStrategyManager implements INotificationConsumer
         }
     }
 
-    public List<List<AbstractCompactionStrategy>> getStrategies()
+    public List<List<AbstractCompactionStrategy>> getStrategies(Directories.DirectoryType directoryType)
     {
         maybeReloadDiskBoundaries();
         readLock.lock();
         try
         {
             List<AbstractCompactionStrategy> pending = new ArrayList<>();
-            pendingRepairs.values().stream().flatMap(Collection::stream).forEach(p -> pending.addAll(p.getStrategies()));
-            return Arrays.asList(repaired.values().stream().flatMap(Collection::stream).collect(Collectors.toList()),
-                                 unrepaired.values().stream().flatMap(Collection::stream).collect(Collectors.toList()), pending);
+            pendingRepairs.get(directoryType).forEach(p -> pending.addAll(p.getStrategies()));
+            return Arrays.asList(repaired.get(directoryType),
+                                 unrepaired.get(directoryType), pending);
         }
         finally
         {
