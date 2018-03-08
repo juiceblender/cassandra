@@ -250,6 +250,12 @@ public class SchemaLoader
 
     public static void createKeyspace(String name, KeyspaceParams params)
     {
+        try {
+            MigrationManager.announceKeyspaceDrop(name, true);
+        } catch (ConfigurationException ce) {
+            //no-op
+        }
+
         MigrationManager.announceNewKeyspace(KeyspaceMetadata.create(name, params, Tables.of()), true);
     }
 
@@ -259,16 +265,34 @@ public class SchemaLoader
         for (TableMetadata.Builder builder : builders)
             tables.add(builder.build());
 
+        try {
+            MigrationManager.announceKeyspaceDrop(name, true);
+        } catch (ConfigurationException ce) {
+            //no-op
+        }
+
         MigrationManager.announceNewKeyspace(KeyspaceMetadata.create(name, params, tables.build()), true);
     }
 
     public static void createKeyspace(String name, KeyspaceParams params, TableMetadata... tables)
     {
+        try {
+            MigrationManager.announceKeyspaceDrop(name, true);
+        } catch (ConfigurationException ce) {
+            //no-op
+        }
+
         MigrationManager.announceNewKeyspace(KeyspaceMetadata.create(name, params, Tables.of(tables)), true);
     }
 
     public static void createKeyspace(String name, KeyspaceParams params, Tables tables, Types types)
     {
+        try {
+            MigrationManager.announceKeyspaceDrop(name, true);
+        } catch (ConfigurationException ce) {
+            //no-op
+        }
+
         MigrationManager.announceNewKeyspace(KeyspaceMetadata.create(name, params, tables, Views.none(), types, Functions.none()), true);
     }
 

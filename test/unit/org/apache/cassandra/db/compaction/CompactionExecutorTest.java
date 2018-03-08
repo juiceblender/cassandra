@@ -23,9 +23,11 @@ import java.util.concurrent.TimeUnit;
 
 import org.junit.After;
 import org.junit.Before;
+import org.junit.BeforeClass;
 import org.junit.Test;
 import org.apache.cassandra.concurrent.DebuggableThreadPoolExecutor;
 import org.apache.cassandra.config.DatabaseDescriptor;
+import org.apache.cassandra.cql3.CQLTester;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertNotNull;
@@ -50,6 +52,11 @@ public class CompactionExecutorTest
         }
     }
     private CompactionManager.CompactionExecutor executor;
+
+    @BeforeClass
+    public static void refreshJVM() {
+        CQLTester.tearDownClass();
+    }
 
     @Before
     public void setup()

@@ -28,13 +28,16 @@ import java.util.UUID;
 import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.Iterables;
 import com.google.common.collect.Lists;
+import org.junit.AfterClass;
 import org.junit.Assert;
 import org.junit.BeforeClass;
 import org.junit.After;
 import org.junit.Ignore;
 import org.junit.Test;
-
 import org.apache.cassandra.locator.InetAddressAndPort;
+import org.apache.cassandra.config.DatabaseDescriptor;
+import org.apache.cassandra.dht.ByteOrderedPartitioner;
+import org.apache.cassandra.dht.IPartitioner;
 import org.apache.cassandra.schema.Schema;
 import org.apache.cassandra.schema.TableMetadata;
 import org.apache.cassandra.db.*;
@@ -51,6 +54,7 @@ import org.apache.cassandra.io.sstable.format.SSTableReader;
 import org.apache.cassandra.schema.KeyspaceParams;
 import org.apache.cassandra.service.ActiveRepairService;
 import org.apache.cassandra.SchemaLoader;
+import org.apache.cassandra.service.StorageService;
 import org.apache.cassandra.streaming.PreviewKind;
 import org.apache.cassandra.utils.ByteBufferUtil;
 import org.apache.cassandra.utils.UUIDGen;
@@ -75,6 +79,7 @@ public class AntiCompactionTest
     private static final String CF = "AntiCompactionTest";
     private static TableMetadata metadata;
     private static ColumnFamilyStore cfs;
+    private static IPartitioner originalPartitioner;
 
     @BeforeClass
     public static void defineSchema() throws ConfigurationException
@@ -83,6 +88,13 @@ public class AntiCompactionTest
         metadata = SchemaLoader.standardCFMD(KEYSPACE1, CF).build();
         SchemaLoader.createKeyspace(KEYSPACE1, KeyspaceParams.simple(1), metadata);
         cfs = Schema.instance.getColumnFamilyStoreInstance(metadata.id);
+        originalPartitioner = StorageService.instance.setPartitionerUnsafe(ByteOrderedPartitioner.instance);
+    }
+
+    @AfterClass
+    public static void afterClass()
+    {
+        DatabaseDescriptor.setPartitionerUnsafe(originalPartitioner);
     }
 
     @After
