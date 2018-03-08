@@ -55,10 +55,12 @@ import org.apache.cassandra.io.util.SsdDiskOptimizationStrategy;
 import org.apache.cassandra.locator.DynamicEndpointSnitch;
 import org.apache.cassandra.locator.EndpointSnitchInfo;
 import org.apache.cassandra.locator.IEndpointSnitch;
+import org.apache.cassandra.locator.InetAddressAndPort;
 import org.apache.cassandra.locator.SeedProvider;
 import org.apache.cassandra.net.BackPressureStrategy;
 import org.apache.cassandra.net.RateBasedBackPressure;
 import org.apache.cassandra.security.EncryptionContext;
+import org.apache.cassandra.security.SSLFactory;
 import org.apache.cassandra.service.CacheService.CacheType;
 import org.apache.cassandra.utils.FBUtilities;
 
@@ -111,7 +113,7 @@ public class DatabaseDescriptor
     private static long indexSummaryCapacityInMB;
 
     private static String localDC;
-    private static Comparator<InetAddress> localComparator;
+    private static Comparator<InetAddressAndPort> localComparator;
     private static EncryptionContext encryptionContext;
     private static boolean hasLoggedConfig;
 
@@ -308,6 +310,7 @@ public class DatabaseDescriptor
 
     private static void applyAll() throws ConfigurationException
     {
+        //InetAddressAndPort cares that applySimpleConfig runs first
         applySimpleConfig();
 
         applyPartitioner();
@@ -321,10 +324,15 @@ public class DatabaseDescriptor
         applySeedProvider();
 
         applyEncryptionContext();
+
+        applySslContextHotReload();
     }
 
     private static void applySimpleConfig()
     {
+        //Doing this first before all other things in case other pieces of config want to construct
+        //InetAddressAndPort and get the right defaults
+        InetAddressAndPort.initializeDefaultPort(getStoragePort());
 
         if (conf.commitlog_sync == null)
         {
@@ -835,7 +843,7 @@ public class DatabaseDescriptor
         }
         else
         {
-            rpcAddress = FBUtilities.getLocalAddress();
+            rpcAddress = FBUtilities.getJustLocalAddress();
         }
 
         /* RPC address to broadcast */
@@ -866,6 +874,11 @@ public class DatabaseDescriptor
         // always attempt to load the cipher factory, as we could be in the situation where the user has disabled encryption,
         // but has existing commitlogs and sstables on disk that are still encrypted (and still need to be read)
         encryptionContext = new EncryptionContext(conf.transparent_data_encryption_options);
+    }
+
+    public static void applySslContextHotReload()
+    {
+        SSLFactory.initHotReloading(conf.server_encryption_options, conf.client_encryption_options, false);
     }
 
     public static void applySeedProvider()
@@ -964,10 +977,10 @@ public class DatabaseDescriptor
         snitch = createEndpointSnitch(conf.dynamic_snitch, conf.endpoint_snitch);
         EndpointSnitchInfo.create();
 
-        localDC = snitch.getDatacenter(FBUtilities.getBroadcastAddress());
-        localComparator = new Comparator<InetAddress>()
+        localDC = snitch.getDatacenter(FBUtilities.getBroadcastAddressAndPort());
+        localComparator = new Comparator<InetAddressAndPort>()
         {
-            public int compare(InetAddress endpoint1, InetAddress endpoint2)
+            public int compare(InetAddressAndPort endpoint1, InetAddressAndPort endpoint2)
             {
                 boolean local1 = localDC.equals(snitch.getDatacenter(endpoint1));
                 boolean local2 = localDC.equals(snitch.getDatacenter(endpoint2));
@@ -1327,14 +1340,14 @@ public class DatabaseDescriptor
         return conf.num_tokens;
     }
 
-    public static InetAddress getReplaceAddress()
+    public static InetAddressAndPort getReplaceAddress()
     {
         try
         {
             if (System.getProperty(Config.PROPERTY_PREFIX + "replace_address", null) != null)
-                return InetAddress.getByName(System.getProperty(Config.PROPERTY_PREFIX + "replace_address", null));
+                return InetAddressAndPort.getByName(System.getProperty(Config.PROPERTY_PREFIX + "replace_address", null));
             else if (System.getProperty(Config.PROPERTY_PREFIX + "replace_address_first_boot", null) != null)
-                return InetAddress.getByName(System.getProperty(Config.PROPERTY_PREFIX + "replace_address_first_boot", null));
+                return InetAddressAndPort.getByName(System.getProperty(Config.PROPERTY_PREFIX + "replace_address_first_boot", null));
             return null;
         }
         catch (UnknownHostException e)
@@ -1669,9 +1682,19 @@ public class DatabaseDescriptor
         return conf.saved_caches_directory;
     }
 
-    public static Set<InetAddress> getSeeds()
+    public static Set<InetAddressAndPort> getSeeds()
     {
-        return ImmutableSet.<InetAddress>builder().addAll(seedProvider.getSeeds()).build();
+        return ImmutableSet.<InetAddressAndPort>builder().addAll(seedProvider.getSeeds()).build();
+    }
+
+    public static SeedProvider getSeedProvider()
+    {
+        return seedProvider;
+    }
+
+    public static void setSeedProvider(SeedProvider newSeedProvider)
+    {
+        seedProvider = newSeedProvider;
     }
 
     public static InetAddress getListenAddress()
@@ -1720,6 +1743,12 @@ public class DatabaseDescriptor
         broadcastAddress = broadcastAdd;
     }
 
+    /**
+     * This is the address used to bind for the native protocol to communicate with clients. Most usages in the code
+     * refer to it as native address although some places still call it RPC address. It's not thrift RPC anymore
+     * so native is more appropriate. The address alone is not enough to uniquely identify this instance because
+     * multiple instances might use the same interface with different ports.
+     */
     public static InetAddress getRpcAddress()
     {
         return rpcAddress;
@@ -1731,7 +1760,12 @@ public class DatabaseDescriptor
     }
 
     /**
-     * May be null, please use {@link FBUtilities#getBroadcastRpcAddress()} instead.
+     * This is the address used to reach this instance for the native protocol to communicate with clients. Most usages in the code
+     * refer to it as native address although some places still call it RPC address. It's not thrift RPC anymore
+     * so native is more appropriate. The address alone is not enough to uniquely identify this instance because
+     * multiple instances might use the same interface with different ports.
+     *
+     * May be null, please use {@link FBUtilities#getBroadcastNativeAddressAndPort()} instead.
      */
     public static InetAddress getBroadcastRpcAddress()
     {
@@ -1758,6 +1792,10 @@ public class DatabaseDescriptor
         return conf.start_native_transport;
     }
 
+    /**
+     *  This is the port used with RPC address for the native protocol to communicate with clients. Now that thrift RPC
+     *  is no longer in use there is no RPC port.
+     */
     public static int getNativeTransportPort()
     {
         return Integer.parseInt(System.getProperty(Config.PROPERTY_PREFIX + "native_transport_port", Integer.toString(conf.native_transport_port)));
@@ -2224,7 +2262,7 @@ public class DatabaseDescriptor
         return localDC;
     }
 
-    public static Comparator<InetAddress> getLocalComparator()
+    public static Comparator<InetAddressAndPort> getLocalComparator()
     {
         return localComparator;
     }
@@ -2501,5 +2539,15 @@ public class DatabaseDescriptor
     public static String getFullQueryLogPath()
     {
         return  conf.full_query_log_dir;
+    }
+
+    public static int getBlockForPeersPercentage()
+    {
+        return conf.block_for_peers_percentage;
+    }
+
+    public static int getBlockForPeersTimeoutInSeconds()
+    {
+        return conf.block_for_peers_timeout_in_secs;
     }
 }

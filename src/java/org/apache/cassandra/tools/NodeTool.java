@@ -59,6 +59,7 @@ public class NodeTool
                 TableHistograms.class,
                 Cleanup.class,
                 ClearSnapshot.class,
+                ClientStats.class,
                 Compact.class,
                 Scrub.class,
                 Verify.class,
@@ -87,6 +88,7 @@ public class NodeTool
                 GetTraceProbability.class,
                 GetInterDCStreamThroughput.class,
                 GetEndpoints.class,
+                GetSeeds.class,
                 GetSSTables.class,
                 GetMaxHintWindow.class,
                 GossipInfo.class,
@@ -102,6 +104,7 @@ public class NodeTool
                 Refresh.class,
                 RemoveNode.class,
                 Assassinate.class,
+                ReloadSeeds.class,
                 ResetFullQueryLog.class,
                 Repair.class,
                 RepairAdmin.class,
@@ -153,7 +156,8 @@ public class NodeTool
                 RefreshSizeEstimates.class,
                 RelocateSSTables.class,
                 ViewBuildStatus.class,
-                HandoffWindow.class
+                HandoffWindow.class,
+                ReloadSslCertificates.class
         );
 
         Cli.CliBuilder<Runnable> builder = Cli.builder("nodetool");
@@ -247,6 +251,9 @@ public class NodeTool
 
         @Option(type = OptionType.GLOBAL, name = {"-pwf", "--password-file"}, description = "Path to the JMX password file")
         private String passwordFilePath = EMPTY;
+
+        @Option(type = OptionType.GLOBAL, name = { "-wp", "--with-port"}, description = "Operate in 4.0 mode with hosts disambiguated by port number", arity = 0)
+        protected boolean withPort = false;
 
         @Override
         public void run()
@@ -389,6 +396,29 @@ public class NodeTool
                 String dc = epSnitchInfo.getDatacenter(tokenAndEndPoint.getValue());
                 if (!ownershipByDc.containsKey(dc))
                     ownershipByDc.put(dc, new SetHostStat(resolveIp));
+                ownershipByDc.get(dc).add(tokenAndEndPoint.getKey(), tokenAndEndPoint.getValue(), ownerships);
+            }
+        }
+        catch (UnknownHostException e)
+        {
+            throw new RuntimeException(e);
+        }
+        return ownershipByDc;
+    }
+
+    public static SortedMap<String, SetHostStatWithPort> getOwnershipByDcWithPort(NodeProbe probe, boolean resolveIp,
+                                                                  Map<String, String> tokenToEndpoint,
+                                                                  Map<String, Float> ownerships)
+    {
+        SortedMap<String, SetHostStatWithPort> ownershipByDc = Maps.newTreeMap();
+        EndpointSnitchInfoMBean epSnitchInfo = probe.getEndpointSnitchInfoProxy();
+        try
+        {
+            for (Entry<String, String> tokenAndEndPoint : tokenToEndpoint.entrySet())
+            {
+                String dc = epSnitchInfo.getDatacenter(tokenAndEndPoint.getValue());
+                if (!ownershipByDc.containsKey(dc))
+                    ownershipByDc.put(dc, new SetHostStatWithPort(resolveIp));
                 ownershipByDc.get(dc).add(tokenAndEndPoint.getKey(), tokenAndEndPoint.getValue(), ownerships);
             }
         }

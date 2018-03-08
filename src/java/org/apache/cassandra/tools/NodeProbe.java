@@ -261,14 +261,14 @@ public class NodeProbe implements AutoCloseable
         return ssProxy.forceKeyspaceCleanup(jobs, keyspaceName, tables);
     }
 
-    public int scrub(boolean disableSnapshot, boolean skipCorrupted, boolean checkData, int jobs, String keyspaceName, String... tables) throws IOException, ExecutionException, InterruptedException
+    public int scrub(boolean disableSnapshot, boolean skipCorrupted, boolean checkData, boolean reinsertOverflowedTTL, int jobs, String keyspaceName, String... tables) throws IOException, ExecutionException, InterruptedException
     {
-        return ssProxy.scrub(disableSnapshot, skipCorrupted, checkData, jobs, keyspaceName, tables);
+        return ssProxy.scrub(disableSnapshot, skipCorrupted, checkData, reinsertOverflowedTTL, jobs, keyspaceName, tables);
     }
 
-    public int verify(boolean extendedVerify, String keyspaceName, String... tableNames) throws IOException, ExecutionException, InterruptedException
+    public int verify(boolean extendedVerify, boolean checkVersion, boolean diskFailurePolicy, boolean mutateRepairStatus, boolean checkOwnsTokens, boolean quick, String keyspaceName, String... tableNames) throws IOException, ExecutionException, InterruptedException
     {
-        return ssProxy.verify(extendedVerify, keyspaceName, tableNames);
+        return ssProxy.verify(extendedVerify, checkVersion, diskFailurePolicy, mutateRepairStatus, checkOwnsTokens, quick, keyspaceName, tableNames);
     }
 
     public int upgradeSSTables(String keyspaceName, boolean excludeCurrentVersion, int jobs, String... tableNames) throws IOException, ExecutionException, InterruptedException
@@ -305,10 +305,10 @@ public class NodeProbe implements AutoCloseable
         }
     }
 
-    public void scrub(PrintStream out, boolean disableSnapshot, boolean skipCorrupted, boolean checkData, int jobs, String keyspaceName, String... tables) throws IOException, ExecutionException, InterruptedException
+    public void scrub(PrintStream out, boolean disableSnapshot, boolean skipCorrupted, boolean checkData, boolean reinsertOverflowedTTL, int jobs, String keyspaceName, String... tables) throws IOException, ExecutionException, InterruptedException
     {
         checkJobs(out, jobs);
-        switch (scrub(disableSnapshot, skipCorrupted, checkData, jobs, keyspaceName, tables))
+        switch (ssProxy.scrub(disableSnapshot, skipCorrupted, checkData, reinsertOverflowedTTL, jobs, keyspaceName, tables))
         {
             case 1:
                 failed = true;
@@ -321,9 +321,9 @@ public class NodeProbe implements AutoCloseable
         }
     }
 
-    public void verify(PrintStream out, boolean extendedVerify, String keyspaceName, String... tableNames) throws IOException, ExecutionException, InterruptedException
+    public void verify(PrintStream out, boolean extendedVerify, boolean checkVersion, boolean diskFailurePolicy, boolean mutateRepairStatus, boolean checkOwnsTokens, boolean quick, String keyspaceName, String... tableNames) throws IOException, ExecutionException, InterruptedException
     {
-        switch (verify(extendedVerify, keyspaceName, tableNames))
+        switch (verify(extendedVerify, checkVersion, diskFailurePolicy, mutateRepairStatus, checkOwnsTokens, quick, keyspaceName, tableNames))
         {
             case 1:
                 failed = true;
@@ -450,39 +450,39 @@ public class NodeProbe implements AutoCloseable
         ssProxy.drain();
     }
 
-    public Map<String, String> getTokenToEndpointMap()
+    public Map<String, String> getTokenToEndpointMap(boolean withPort)
     {
-        return ssProxy.getTokenToEndpointMap();
+        return withPort ? ssProxy.getTokenToEndpointWithPortMap() : ssProxy.getTokenToEndpointMap();
     }
 
-    public List<String> getLiveNodes()
+    public List<String> getLiveNodes(boolean withPort)
     {
-        return ssProxy.getLiveNodes();
+        return withPort ? ssProxy.getLiveNodesWithPort() : ssProxy.getLiveNodes();
     }
 
-    public List<String> getJoiningNodes()
+    public List<String> getJoiningNodes(boolean withPort)
     {
-        return ssProxy.getJoiningNodes();
+        return withPort ? ssProxy.getJoiningNodesWithPort() : ssProxy.getJoiningNodes();
     }
 
-    public List<String> getLeavingNodes()
+    public List<String> getLeavingNodes(boolean withPort)
     {
-        return ssProxy.getLeavingNodes();
+        return withPort ? ssProxy.getLeavingNodesWithPort() : ssProxy.getLeavingNodes();
     }
 
-    public List<String> getMovingNodes()
+    public List<String> getMovingNodes(boolean withPort)
     {
-        return ssProxy.getMovingNodes();
+        return withPort ? ssProxy.getMovingNodesWithPort() : ssProxy.getMovingNodes();
     }
 
-    public List<String> getUnreachableNodes()
+    public List<String> getUnreachableNodes(boolean withPort)
     {
-        return ssProxy.getUnreachableNodes();
+        return withPort ? ssProxy.getUnreachableNodesWithPort() : ssProxy.getUnreachableNodes();
     }
 
-    public Map<String, String> getLoadMap()
+    public Map<String, String> getLoadMap(boolean withPort)
     {
-        return ssProxy.getLoadMap();
+        return withPort ? ssProxy.getLoadMapWithPort() : ssProxy.getLoadMap();
     }
 
     public Map<InetAddress, Float> getOwnership()
@@ -490,9 +490,19 @@ public class NodeProbe implements AutoCloseable
         return ssProxy.getOwnership();
     }
 
+    public Map<String, Float> getOwnershipWithPort()
+    {
+        return ssProxy.getOwnershipWithPort();
+    }
+
     public Map<InetAddress, Float> effectiveOwnership(String keyspace) throws IllegalStateException
     {
         return ssProxy.effectiveOwnership(keyspace);
+    }
+
+    public Map<String, Float> effectiveOwnershipWithPort(String keyspace) throws IllegalStateException
+    {
+        return ssProxy.effectiveOwnershipWithPort(keyspace);
     }
 
     public CacheServiceMBean getCacheServiceMBean()
@@ -557,9 +567,9 @@ public class NodeProbe implements AutoCloseable
         return ssProxy.getLocalHostId();
     }
 
-    public Map<String, String> getHostIdMap()
+    public Map<String, String> getHostIdMap(boolean withPort)
     {
-        return ssProxy.getEndpointToHostId();
+        return withPort ? ssProxy.getEndpointWithPortToHostId() : ssProxy.getEndpointToHostId();
     }
 
     public String getLoadString()
@@ -686,9 +696,9 @@ public class NodeProbe implements AutoCloseable
         ssProxy.removeNode(token);
     }
 
-    public String getRemovalStatus()
+    public String getRemovalStatus(boolean withPort)
     {
-        return ssProxy.getRemovalStatus();
+        return withPort ? ssProxy.getRemovalStatusWithPort() : ssProxy.getRemovalStatus();
     }
 
     public void forceRemoveCompletion()
@@ -699,6 +709,16 @@ public class NodeProbe implements AutoCloseable
     public void assassinateEndpoint(String address) throws UnknownHostException
     {
         gossProxy.assassinateEndpoint(address);
+    }
+
+    public List<String> reloadSeeds()
+    {
+        return gossProxy.reloadSeeds();
+    }
+
+    public List<String> getSeeds()
+    {
+        return gossProxy.getSeeds();
     }
 
     /**
@@ -773,6 +793,11 @@ public class NodeProbe implements AutoCloseable
     public void setHintedHandoffThrottleInKB(int throttleInKB)
     {
         ssProxy.setHintedHandoffThrottleInKB(throttleInKB);
+    }
+
+    public List<String> getEndpointsWithPort(String keyspace, String cf, String key)
+    {
+        return ssProxy.getNaturalEndpointsWithPort(keyspace, cf, key);
     }
 
     public List<InetAddress> getEndpoints(String keyspace, String cf, String key)
@@ -1144,9 +1169,9 @@ public class NodeProbe implements AutoCloseable
         ssProxy.rebuildSecondaryIndex(ksName, cfName, idxNames);
     }
 
-    public String getGossipInfo()
+    public String getGossipInfo(boolean withPort)
     {
-        return fdProxy.getAllEndpointStates();
+        return withPort ? fdProxy.getAllEndpointStatesWithPort() : fdProxy.getAllEndpointStates();
     }
 
     public void stop(String string)
@@ -1212,9 +1237,9 @@ public class NodeProbe implements AutoCloseable
         return ssProxy.getSchemaVersion();
     }
 
-    public List<String> describeRing(String keyspaceName) throws IOException
+    public List<String> describeRing(String keyspaceName, boolean withPort) throws IOException
     {
-        return ssProxy.describeRingJMX(keyspaceName);
+        return withPort ? ssProxy.describeRingWithPortJMX(keyspaceName) : ssProxy.describeRingJMX(keyspaceName);
     }
 
     public void rebuild(String sourceDc, String keyspace, String tokens, String specificSources)
@@ -1468,6 +1493,32 @@ public class NodeProbe implements AutoCloseable
 
     /**
      * Retrieve Proxy metrics
+     * @param connections, connectedNativeClients, connectedNativeClientsByUser
+     */
+    public Object getClientMetric(String metricName)
+    {
+        try
+        {
+            switch(metricName)
+            {
+                case "connections": // List<Map<String,String>> - list of all native connections and their properties
+                case "connectedNativeClients": // number of connected native clients
+                case "connectedNativeClientsByUser": // number of native clients by username
+                    return JMX.newMBeanProxy(mbeanServerConn,
+                            new ObjectName("org.apache.cassandra.metrics:type=Client,name=" + metricName),
+                            CassandraMetricsRegistry.JmxGaugeMBean.class).getValue();
+                default:
+                    throw new RuntimeException("Unknown client metric " + metricName);
+            }
+        }
+        catch (MalformedObjectNameException e)
+        {
+            throw new RuntimeException(e);
+        }
+    }
+
+    /**
+     * Retrieve Proxy metrics
      * @param metricName Exceptions, Load, TotalHints or TotalHintsInProgress.
      */
     public long getStorageMetric(String metricName)
@@ -1580,11 +1631,11 @@ public class NodeProbe implements AutoCloseable
         }
     }
 
-    public TabularData getFailureDetectorPhilValues()
+    public TabularData getFailureDetectorPhilValues(boolean withPort)
     {
         try
         {
-            return fdProxy.getPhiValues();
+            return withPort ? fdProxy.getPhiValuesWithPort() : fdProxy.getPhiValues();
         }
         catch (OpenDataException e)
         {
@@ -1595,6 +1646,11 @@ public class NodeProbe implements AutoCloseable
     public ActiveRepairServiceMBean getRepairServiceProxy()
     {
         return arsProxy;
+    }
+
+    public void reloadSslCerts()
+    {
+        msProxy.reloadSslCertificates();
     }
 }
 
