@@ -427,7 +427,8 @@ class LogTransaction extends Transactional.AbstractTransactional implements Tran
      */
     static boolean removeUnfinishedLeftovers(TableMetadata metadata)
     {
-        return removeUnfinishedLeftovers(new Directories(metadata).getCFDirectories());
+        //TODO Check me!
+        return removeUnfinishedLeftovers(new Directories(metadata).getAllCFDirectories());
     }
 
     @VisibleForTesting

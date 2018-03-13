@@ -40,6 +40,7 @@ import org.apache.cassandra.config.DatabaseDescriptor;
 import org.apache.cassandra.cql3.QueryProcessor;
 import org.apache.cassandra.cql3.UntypedResultSet;
 import org.apache.cassandra.db.ColumnFamilyStore;
+import org.apache.cassandra.db.Directories;
 import org.apache.cassandra.db.Keyspace;
 import org.apache.cassandra.db.compaction.Verifier;
 import org.apache.cassandra.dht.IPartitioner;
@@ -406,7 +407,7 @@ public class LegacySSTableTest
 
         ColumnFamilyStore cfs = Keyspace.open("legacy_tables").getColumnFamilyStore(table);
 
-        for (File cfDir : cfs.getDirectories().getCFDirectories())
+        for (File cfDir : cfs.getDirectories().getCFDirectories(Directories.DirectoryType.STANDARD))
         {
             copySstablesToTestData(legacyVersion, table, cfDir);
         }
@@ -471,7 +472,7 @@ public class LegacySSTableTest
         File cfDir = new File(ksDir, table);
         cfDir.mkdir();
 
-        for (File srcDir : Keyspace.open("legacy_tables").getColumnFamilyStore(table).getDirectories().getCFDirectories())
+        for (File srcDir : Keyspace.open("legacy_tables").getColumnFamilyStore(table).getDirectories().getCFDirectories(Directories.DirectoryType.STANDARD))
         {
             for (File file : srcDir.listFiles())
             {

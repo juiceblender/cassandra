@@ -83,7 +83,7 @@ public class DirectoriesTest
         tempDataDir.delete(); // hack to create a temp dir
         tempDataDir.mkdir();
 
-        Directories.overrideDataDirectoriesForTest(tempDataDir.getPath());
+        Directories.overrideDataDirectoriesForTest(tempDataDir.getPath(), Directories.DirectoryType.STANDARD);
         // Create two fake data dir for tests, one using CF directories, one that do not.
         createTestFiles();
     }
@@ -185,7 +185,7 @@ public class DirectoriesTest
         Directories parentDirectories = new Directories(PARENT_CFM);
         Directories indexDirectories = new Directories(INDEX_CFM);
         // secondary index has its own directory
-        for (File dir : indexDirectories.getCFDirectories())
+        for (File dir : indexDirectories.getCFDirectories(Directories.DirectoryType.STANDARD))
         {
             assertEquals(cfDir(INDEX_CFM), dir);
         }
@@ -328,14 +328,14 @@ public class DirectoriesTest
         {
             DatabaseDescriptor.setDiskFailurePolicy(DiskFailurePolicy.best_effort);
             // Fake a Directory creation failure
-            if (Directories.dataDirectories.length > 0)
+            if (Directories.standardDataDirectories.length > 0)
             {
                 String[] path = new String[] {KS, "bad"};
-                File dir = new File(Directories.dataDirectories[0].location, StringUtils.join(path, File.separator));
+                File dir = new File(Directories.standardDataDirectories[0].location, StringUtils.join(path, File.separator));
                 FileUtils.handleFSError(new FSWriteError(new IOException("Unable to create directory " + dir), dir));
             }
 
-            for (DataDirectory dd : Directories.dataDirectories)
+            for (DataDirectory dd : Directories.standardDataDirectories)
             {
                 File file = new File(dd.location, new File(KS, "bad").getPath());
                 assertTrue(BlacklistedDirectories.isUnwritable(file));

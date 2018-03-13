@@ -1852,7 +1852,7 @@ public class ColumnFamilyStore implements ColumnFamilyStoreMBean
         for (String ephemeralSnapshot : directories.listEphemeralSnapshots())
         {
             logger.trace("Clearing ephemeral snapshot {} leftover from previous session.", ephemeralSnapshot);
-            Directories.clearSnapshot(ephemeralSnapshot, directories.getCFDirectories());
+            Directories.clearSnapshot(ephemeralSnapshot, directories.getAllCFDirectories());
         }
     }
 
@@ -1949,7 +1949,7 @@ public class ColumnFamilyStore implements ColumnFamilyStoreMBean
      */
     public void clearSnapshot(String snapshotName)
     {
-        List<File> snapshotDirs = getDirectories().getCFDirectories();
+        List<File> snapshotDirs = getDirectories().getAllCFDirectories();
         Directories.clearSnapshot(snapshotName, snapshotDirs);
     }
     /**

@@ -382,8 +382,13 @@ public class TimeWindowCompactionStrategyTest extends SchemaLoader
         t.execute(null);
 
         assertTrue(Files.walk(Paths.get(DatabaseDescriptor.getAllArchiveDataFileLocations()[0]).resolve(KEYSPACE1)).anyMatch(d -> d.toString().contains("Data.db")));
+    }
 
-        //Instant.ofEpochMilli(now).atZone(ZoneId.of("Australia/Sydney")).format(DateTimeFormatter.ofPattern("dd/MM/yyyy HH:mm:ss"));
+    @Test
+    public void testArchiveDirectoryDoesInFactCompactSSTables() {
+        final ColumnFamilyStore cfs = prepareCFS();
+        createAndFlushSomeSSTables(cfs, 2, 1);
+        //FIXME Still need to write the test body
     }
 
     private ColumnFamilyStore prepareCFS() {
@@ -392,5 +397,18 @@ public class TimeWindowCompactionStrategyTest extends SchemaLoader
         cfs.truncateBlocking();
         cfs.disableAutoCompaction();
         return cfs;
+    }
+
+    private void createAndFlushSomeSSTables(ColumnFamilyStore cfs, int numberOfSSTables, int ttl) {
+        final ByteBuffer value = ByteBuffer.wrap(new byte[100]);
+        for (int i = 0; i < numberOfSSTables; i++)
+        {
+            DecoratedKey key = Util.dk(String.valueOf("expired"));
+            new RowUpdateBuilder(cfs.metadata(), System.currentTimeMillis(), ttl, key.getKey())
+            .clustering("column")
+            .add("val", value).build().applyUnsafe();
+
+            cfs.forceBlockingFlush();
+        }
     }
 }

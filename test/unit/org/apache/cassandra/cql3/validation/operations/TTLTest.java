@@ -13,6 +13,7 @@ import org.apache.cassandra.cql3.Attributes;
 import org.apache.cassandra.cql3.CQLTester;
 import org.apache.cassandra.cql3.UntypedResultSet;
 import org.apache.cassandra.db.ColumnFamilyStore;
+import org.apache.cassandra.db.Directories;
 import org.apache.cassandra.db.ExpirationDateOverflowHandling;
 import org.apache.cassandra.db.Keyspace;
 import org.apache.cassandra.db.rows.AbstractCell;
@@ -358,7 +359,7 @@ public class TTLTest extends CQLTester
 
     private void copySSTablesToTableDir(String table, boolean simple, boolean clustering) throws IOException
     {
-        File destDir = Keyspace.open(keyspace()).getColumnFamilyStore(table).getDirectories().getCFDirectories().iterator().next();
+        File destDir = Keyspace.open(keyspace()).getColumnFamilyStore(table).getDirectories().getCFDirectories(Directories.DirectoryType.STANDARD).iterator().next();
         File sourceDir = getTableDir(table, simple, clustering);
         for (File file : sourceDir.listFiles())
         {

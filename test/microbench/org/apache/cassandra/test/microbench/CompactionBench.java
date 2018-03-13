@@ -104,7 +104,7 @@ public class CompactionBench extends CQLTester
     {
         cfs.truncateBlocking();
 
-        List<File> directories = cfs.getDirectories().getCFDirectories();
+        List<File> directories = cfs.getDirectories().getCFDirectories(Directories.DirectoryType.STANDARD);
 
         for (File file : directories)
         {

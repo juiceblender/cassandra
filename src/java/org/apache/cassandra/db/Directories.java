@@ -28,6 +28,7 @@ import java.util.concurrent.ThreadLocalRandom;
 import java.util.function.BiPredicate;
 import com.google.common.annotations.VisibleForTesting;
 import com.google.common.collect.ImmutableMap;
+import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.Iterables;
 import com.google.common.collect.Maps;
 
@@ -91,7 +92,6 @@ public class Directories
     public static final String TMP_SUBDIR = "tmp";
     public static final String SECONDARY_INDEX_NAME_SEPARATOR = ".";
 
-    public static final DataDirectory[] dataDirectories;
     public static final DataDirectory[] standardDataDirectories;
     public static final DataDirectory[] archiveDataDirectories;
 
@@ -111,8 +111,6 @@ public class Directories
         standardDataDirectories = new DataDirectory[standardDataDirectoryLocations.length];
         for (int i = 0; i < standardDataDirectoryLocations.length; ++i)
             standardDataDirectories[i] = new DataDirectory(new File(standardDataDirectoryLocations[i]));
-
-        dataDirectories = ArrayUtils.addAll(standardDataDirectories, archiveDataDirectories);
     }
 
     /**
@@ -198,10 +196,11 @@ public class Directories
     private final DataDirectory[] paths;
     private final DataDirectory[] archivePaths;
     private final File[] dataPaths;
+    private final File[] archiveDataPaths;
 
     public Directories(final TableMetadata metadata)
     {
-        this(metadata, dataDirectories, archiveDataDirectories);
+        this(metadata, standardDataDirectories, archiveDataDirectories);
     }
 
     public Directories(final TableMetadata metadata, Collection<DataDirectory> paths)
@@ -231,6 +230,8 @@ public class Directories
         String indexNameWithDot = idx >= 0 ? metadata.name.substring(idx) : null;
 
         this.dataPaths = new File[paths.length];
+        this.archiveDataPaths = new File[archivepaths.length];
+
         // If upgraded from version less than 2.1, use existing directories
         String oldSSTableRelativePath = join(metadata.keyspace, cfName);
         for (int i = 0; i < paths.length; ++i)
@@ -239,10 +240,10 @@ public class Directories
             dataPaths[i] = new File(paths[i].location, oldSSTableRelativePath);
         }
         boolean olderDirectoryExists = Iterables.any(Arrays.asList(dataPaths), File::exists);
+        String newSSTableRelativePath = join(metadata.keyspace, cfName + '-' + tableId);
         if (!olderDirectoryExists)
         {
             // use 2.1+ style
-            String newSSTableRelativePath = join(metadata.keyspace, cfName + '-' + tableId);
             for (int i = 0; i < paths.length; ++i)
                 dataPaths[i] = new File(paths[i].location, newSSTableRelativePath);
         }
@@ -253,7 +254,11 @@ public class Directories
                 dataPaths[i] = new File(dataPaths[i], indexNameWithDot);
         }
 
-        for (File dir : dataPaths)
+        for (int i = 0; i < archivepaths.length; ++i) {
+            archiveDataPaths[i] = new File(archivepaths[i].location, newSSTableRelativePath);
+        }
+
+        for (File dir : allSSTablePaths())
         {
             try
             {
@@ -296,6 +301,24 @@ public class Directories
     }
 
     /**
+     * @return an iterable of all possible sstable paths, including hot and archive locations.
+     * Guaranteed to only return one copy of each path.
+     */
+    private Iterable<File> allSSTablePaths()
+    {
+        return ImmutableSet.<File>builder().add(dataPaths).add(archiveDataPaths).build();
+    }
+
+    /**
+     * @return an iterable of all possible sstable directories, including hot and archive locations.
+     * Guaranteed to only return one copy of each directories.
+     */
+    private Iterable<DataDirectory> allSSTableDirectories()
+    {
+        return ImmutableSet.<DataDirectory>builder().add(paths).add(archivePaths).build();
+    }
+
+    /**
      * Returns SSTable location which is inside given data directory.
      *
      * @param dataDirectory
@@ -304,7 +327,7 @@ public class Directories
     public File getLocationForDisk(DataDirectory dataDirectory)
     {
         if (dataDirectory != null)
-            for (File dir : dataPaths)
+            for (File dir : allSSTablePaths())
                 if (dir.getAbsolutePath().startsWith(dataDirectory.location.getAbsolutePath()))
                     return dir;
         return null;
@@ -314,7 +337,7 @@ public class Directories
     {
         if (directory != null)
         {
-            for (DataDirectory dataDirectory : paths)
+            for (DataDirectory dataDirectory : ArrayUtils.addAll(paths, archivePaths))
             {
                 if (directory.getAbsolutePath().startsWith(dataDirectory.location.getAbsolutePath()))
                     return dataDirectory;
@@ -325,7 +348,7 @@ public class Directories
 
     public Descriptor find(String filename)
     {
-        for (File dir : dataPaths)
+        for (File dir : allSSTablePaths())
         {
             File file = new File(dir, filename);
             if (file.exists())
@@ -353,6 +376,7 @@ public class Directories
      */
     public File getWriteableLocationAsFile(long writeSize)
     {
+        final DataDirectory writeableLocation = getWriteableLocation(writeSize);
         File location = getLocationForDisk(getWriteableLocation(writeSize));
         if (location == null)
             throw new FSWriteError(new IOException("No configured data directory contains enough space to write " + writeSize + " bytes"), "");
@@ -376,7 +400,7 @@ public class Directories
 
     public void removeTemporaryDirectories()
     {
-        for (File dataDir : dataPaths)
+        for (File dataDir : allSSTablePaths())
         {
             File tmpDir = new File(dataDir, TMP_SUBDIR);
             if (tmpDir.exists())
@@ -417,7 +441,8 @@ public class Directories
 
         long totalAvailable = 0L;
 
-        DataDirectory[] dataDirectories = useArchivingDirectory ? archiveDataDirectories : standardDataDirectories;
+        //Should this be using paths instead of standardDataDirectories? What if it's supposed to be using archiveDataDirectories?
+        DataDirectory[] dataDirectories = useArchivingDirectory ? archivePaths : paths;
 
         // pick directories with enough space and so that resulting sstable dirs aren't blacklisted for writes.
         boolean tooBig = false;
@@ -482,12 +507,16 @@ public class Directories
         Collections.sort(candidates);
     }
 
-    public boolean hasAvailableDiskSpace(long estimatedSSTables, long expectedTotalWriteSize)
+    public boolean hasAvailableDiskSpace(long estimatedSSTables, long expectedTotalWriteSize, DirectoryType directoryType)
     {
         long writeSize = expectedTotalWriteSize / estimatedSSTables;
         long totalAvailable = 0L;
 
-        for (DataDirectory dataDir : paths)
+        DataDirectory[] dataDirectories = directoryType == DirectoryType.ARCHIVE ? archivePaths : paths;
+
+        //TODO Make this dependent on whether it's a archiving or normal compaction check
+        //If it's an archiving compaction, then the archiving directory needs to have enough space
+        for (DataDirectory dataDir : dataDirectories)
         {
             if (BlacklistedDirectories.isUnwritable(getLocationForDisk(dataDir)))
                 continue;
@@ -762,7 +791,7 @@ public class Directories
             if (filtered)
                 return;
 
-            for (File location : dataPaths)
+            for (File location : allSSTablePaths())
             {
                 if (BlacklistedDirectories.isUnreadable(location))
                     continue;
@@ -859,7 +888,7 @@ public class Directories
     private List<File> listSnapshots()
     {
         final List<File> snapshots = new LinkedList<>();
-        for (final File dir : dataPaths)
+        for (final File dir : allSSTablePaths())
         {
             File snapshotDir = dir.getName().startsWith(SECONDARY_INDEX_NAME_SEPARATOR) ?
                                        new File(dir.getParent(), SNAPSHOT_SUBDIR) :
@@ -883,7 +912,7 @@ public class Directories
 
     public boolean snapshotExists(String snapshotName)
     {
-        for (File dir : dataPaths)
+        for (File dir : allSSTablePaths())
         {
             File snapshotDir;
             if (dir.getName().startsWith(SECONDARY_INDEX_NAME_SEPARATOR))
@@ -928,7 +957,7 @@ public class Directories
     // The snapshot must exist
     public long snapshotCreationTime(String snapshotName)
     {
-        for (File dir : dataPaths)
+        for (File dir : allSSTablePaths())
         {
             File snapshotDir = getSnapshotDirectory(dir, snapshotName);
             if (snapshotDir.exists())
@@ -943,7 +972,7 @@ public class Directories
     public long trueSnapshotsSize()
     {
         long result = 0L;
-        for (File dir : dataPaths)
+        for (File dir : allSSTablePaths())
         {
             File snapshotDir = dir.getName().startsWith(SECONDARY_INDEX_NAME_SEPARATOR) ?
                                        new File(dir.getParent(), SNAPSHOT_SUBDIR) :
@@ -956,11 +985,11 @@ public class Directories
     /**
      * @return Raw size on disk for all directories
      */
-    public long getRawDiretoriesSize()
+    public long getRawDirectoriesSize()
     {
         long totalAllocatedSize = 0L;
 
-        for (File path : dataPaths)
+        for (File path : allSSTablePaths())
             totalAllocatedSize += FileUtils.folderSize(path);
 
         return totalAllocatedSize;
@@ -986,8 +1015,7 @@ public class Directories
 
     public static List<File> getKSChildDirectories(String ksName)
     {
-        return getKSChildDirectories(ksName, dataDirectories);
-
+        return getKSChildDirectories(ksName, ArrayUtils.addAll(standardDataDirectories, archiveDataDirectories));
     }
 
     // Recursively finds all the sub directories in the KS directory.
@@ -1009,10 +1037,21 @@ public class Directories
         return result;
     }
 
-    public List<File> getCFDirectories()
-    {
+    public List<File> getAllCFDirectories() {
         List<File> result = new ArrayList<>();
-        for (File dataDirectory : dataPaths)
+        for (File dataDirectory : allSSTablePaths())
+        {
+            if (dataDirectory.isDirectory())
+                result.add(dataDirectory);
+        }
+        return result;
+    }
+
+    public List<File> getCFDirectories(DirectoryType directoryType)
+    {
+        File[] dataDirectories = directoryType == DirectoryType.ARCHIVE ? archiveDataPaths : dataPaths;
+        List<File> result = new ArrayList<>();
+        for (File dataDirectory : dataDirectories)
         {
             if (dataDirectory.isDirectory())
                 result.add(dataDirectory);
@@ -1041,18 +1080,27 @@ public class Directories
     }
 
     @VisibleForTesting
-    static void overrideDataDirectoriesForTest(String loc)
+    static void overrideDataDirectoriesForTest(String loc, DirectoryType directoryType)
     {
-        for (int i = 0; i < dataDirectories.length; ++i)
-            dataDirectories[i] = new DataDirectory(new File(loc));
+        if (directoryType == DirectoryType.STANDARD)
+        {
+            for (int i = 0; i < standardDataDirectories.length; ++i)
+                standardDataDirectories[i] = new DataDirectory(new File(loc));
+        } else {
+            for (int i = 0; i < archiveDataDirectories.length; ++i)
+                archiveDataDirectories[i] = new DataDirectory(new File(loc));
+        }
     }
 
     @VisibleForTesting
     static void resetDataDirectoriesAfterTest()
     {
-        String[] locations = DatabaseDescriptor.getAllDataFileLocations();
+        String[] locations = DatabaseDescriptor.getAllStandardDataFileLocations();
         for (int i = 0; i < locations.length; ++i)
-            dataDirectories[i] = new DataDirectory(new File(locations[i]));
+            standardDataDirectories[i] = new DataDirectory(new File(locations[i]));
+        String[] archiveLocations = DatabaseDescriptor.getAllArchiveDataFileLocations();
+        for (int i = 0; i < archiveLocations.length; ++i)
+            archiveDataDirectories[i] = new DataDirectory(new File(archiveLocations[i]));
     }
 
     private class SSTableSizeSummer extends DirectorySizeCalculator

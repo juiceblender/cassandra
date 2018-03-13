@@ -536,7 +536,8 @@ public class LifecycleTransaction extends Transactional.AbstractTransactional
 
     public static boolean removeUnfinishedLeftovers(ColumnFamilyStore cfs)
     {
-        return LogTransaction.removeUnfinishedLeftovers(cfs.getDirectories().getCFDirectories());
+        //TODO Check me!
+        return LogTransaction.removeUnfinishedLeftovers(cfs.getDirectories().getAllCFDirectories());
     }
 
     public static boolean removeUnfinishedLeftovers(TableMetadata metadata)

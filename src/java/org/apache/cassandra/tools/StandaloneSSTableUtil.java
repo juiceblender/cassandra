@@ -86,7 +86,7 @@ public class StandaloneSSTableUtil
     {
         Directories directories = new Directories(metadata);
 
-        for (File dir : directories.getCFDirectories())
+        for (File dir : directories.getCFDirectories(Directories.DirectoryType.STANDARD))
         {
             for (File file : LifecycleTransaction.getFiles(dir.toPath(), getFilter(options), Directories.OnTxnErr.THROW))
                 handler.output(file.getCanonicalPath());

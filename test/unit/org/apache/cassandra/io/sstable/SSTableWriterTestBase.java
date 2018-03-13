@@ -34,6 +34,7 @@ import org.apache.cassandra.SchemaLoader;
 import org.apache.cassandra.config.Config;
 import org.apache.cassandra.config.DatabaseDescriptor;
 import org.apache.cassandra.db.ColumnFamilyStore;
+import org.apache.cassandra.db.Directories;
 import org.apache.cassandra.db.Keyspace;
 import org.apache.cassandra.db.SerializationHeader;
 import org.apache.cassandra.db.compaction.CompactionManager;
@@ -142,7 +143,7 @@ public class SSTableWriterTestBase extends SchemaLoader
             liveDescriptors.add(sstable.descriptor.generation);
             spaceUsed += sstable.bytesOnDisk();
         }
-        for (File dir : cfs.getDirectories().getCFDirectories())
+        for (File dir : cfs.getDirectories().getAllCFDirectories())
         {
             for (File f : dir.listFiles())
             {
