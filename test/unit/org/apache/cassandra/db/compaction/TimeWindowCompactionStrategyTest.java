@@ -358,26 +358,27 @@ public class TimeWindowCompactionStrategyTest extends SchemaLoader
 
         cfs.forceBlockingFlush();
 
-        //Verify that the newly flushed SSTable is not present in the archive directory
-        assertFalse(Files.walk(Paths.get(DatabaseDescriptor.getAllArchiveDataFileLocations()[0]).resolve(KEYSPACE1), 1).anyMatch(d -> d.toString().contains("Data.db")));
-        assertTrue(Files.walk(Paths.get(DatabaseDescriptor.getAllStandardDataFileLocations()[0]).resolve(KEYSPACE1), 1).anyMatch(d -> d.toString().contains("Data.db")));
+        // Verify that the newly flushed SSTable is not present in the archive directory
+        // We use max depth of 2 to omit backup/snapshot directories
+        assertFalse(Files.walk(Paths.get(DatabaseDescriptor.getAllArchiveDataFileLocations()[0]).resolve(KEYSPACE1), 2).anyMatch(d -> d.toString().contains("Data.db")));
+        assertTrue(Files.walk(Paths.get(DatabaseDescriptor.getAllStandardDataFileLocations()[0]).resolve(KEYSPACE1), 2).anyMatch(d -> d.toString().contains("Data.db")));
 
         TimeWindowCompactionStrategy twcs = createQuicklyExpiringTWCS(cfs);
         cfs.getLiveSSTables().forEach(twcs::addSSTable);
         twcs.startup();
 
-        //There's just a single SSTable with no tombstones and it hasn't passed archive time yet, so we expect
-        //to have no compaction tasks.
+        // There's just a single SSTable with no tombstones and it hasn't passed archive time yet, so we expect
+        // to have no compaction tasks.
         assertNull(twcs.getNextBackgroundTask(FBUtilities.nowInSeconds()));
 
         Thread.sleep(4000);
         AbstractCompactionTask t = twcs.getNextBackgroundTask(FBUtilities.nowInSeconds());
 
-        //It's now past the archive time window, so we expect there to be a compaction task to write to archive
+        // It's now past the archive time window, so we expect there to be a compaction task to write to archive
         assertNotNull(t);
         t.execute(null);
 
-        assertTrue(Files.walk(Paths.get(DatabaseDescriptor.getAllArchiveDataFileLocations()[0]).resolve(KEYSPACE1), 1).anyMatch(d -> d.toString().contains("Data.db")));
+        assertTrue(Files.walk(Paths.get(DatabaseDescriptor.getAllArchiveDataFileLocations()[0]).resolve(KEYSPACE1), 2).anyMatch(d -> d.toString().contains("Data.db")));
     }
 
     @Test
@@ -390,23 +391,24 @@ public class TimeWindowCompactionStrategyTest extends SchemaLoader
         cfs.getLiveSSTables().forEach(twcs::addSSTable);
         twcs.startup();
 
-        //Wait for the archiving time window to be reached
+        // Wait for the archiving time window to be reached
         Thread.sleep(4000);
 
         AbstractCompactionTask t = twcs.getNextBackgroundTask(FBUtilities.nowInSeconds());
 
         // It's now past the archive time window, so there could be an archiving compaction
         // but we are not expecting anything in archive because normal TWCS compaction gets priority
+        // We use max depth of 2 to omit backup/snapshot directories
         assertNotNull(t);
         t.execute(null);
-        assertFalse(Files.walk(Paths.get(DatabaseDescriptor.getAllArchiveDataFileLocations()[0]).resolve(KEYSPACE1), 1).anyMatch(d -> d.toString().contains("Data.db")));
+        assertFalse(Files.walk(Paths.get(DatabaseDescriptor.getAllArchiveDataFileLocations()[0]).resolve(KEYSPACE1), 2).anyMatch(d -> d.toString().contains("Data.db")));
 
         cfs.getLiveSSTables().forEach(twcs::addSSTable);
         t = twcs.getNextBackgroundTask(FBUtilities.nowInSeconds());
         t.execute(null);
 
         // We now expect TWCS to archive the remaining SSTables
-        assertTrue(Files.walk(Paths.get(DatabaseDescriptor.getAllArchiveDataFileLocations()[0]).resolve(KEYSPACE1), 1).anyMatch(d -> d.toString().contains("Data.db")));
+        assertTrue(Files.walk(Paths.get(DatabaseDescriptor.getAllArchiveDataFileLocations()[0]).resolve(KEYSPACE1), 2).anyMatch(d -> d.toString().contains("Data.db")));
     }
 
     @Test
@@ -416,9 +418,9 @@ public class TimeWindowCompactionStrategyTest extends SchemaLoader
         TimeWindowCompactionStrategy twcs = createQuicklyExpiringTWCS(cfs);
         twcs.startup();
 
-        for (int i = 0; i < 4; i++)
+        for (int i = 0; i < 3; i++)
         {
-            createAndFlushSomeSSTables(cfs, 1, 16 - 4*i);
+            createAndFlushSomeSSTables(cfs, 1, 12);
             cfs.getLiveSSTables().forEach(twcs::addSSTable);
             Thread.sleep(4000);
 
@@ -426,14 +428,14 @@ public class TimeWindowCompactionStrategyTest extends SchemaLoader
             System.out.println("Compacting iteration " + i);
         }
 
-        //Wait for TTL to pass (Smallest valid time window available to TWCS is MINUTES, so we
-        //count on expiring SSTables instead of the actual bucket to check for compactions
-        Thread.sleep(5000);
+        // Wait for TTL to pass (Smallest valid time window available to TWCS is MINUTES, so we
+        // count on expiring SSTables instead of the actual bucket to check for compactions
+        Thread.sleep(9000);
         final AbstractCompactionTask t = twcs.getNextBackgroundTask(FBUtilities.nowInSeconds());
         t.execute(null);
 
-        //The end result is that the compacted SSTables ends up back in the archived directory.
-        assertFalse(Files.walk(Paths.get(DatabaseDescriptor.getAllStandardDataFileLocations()[0]).resolve(KEYSPACE1), 1).anyMatch(d -> d.toString().contains("Data.db")));
+        // The end result is that the compacted SSTables ends up back in the archived directory.
+        assertFalse(Files.walk(Paths.get(DatabaseDescriptor.getAllStandardDataFileLocations()[0]).resolve(KEYSPACE1), 2).anyMatch(d -> d.toString().contains("Data.db")));
     }
 
     private ColumnFamilyStore prepareCFS() {
