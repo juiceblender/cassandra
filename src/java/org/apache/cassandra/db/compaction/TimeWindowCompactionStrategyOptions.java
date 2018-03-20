@@ -182,6 +182,7 @@ public final class TimeWindowCompactionStrategyOptions
         uncheckedOptions.remove(EXPIRED_SSTABLE_CHECK_FREQUENCY_SECONDS_KEY);
         uncheckedOptions.remove(UNSAFE_AGGRESSIVE_SSTABLE_EXPIRATION_KEY);
         uncheckedOptions.remove(ARCHIVE_SSTABLES_SIZE_KEY);
+        uncheckedOptions.remove(ARCHIVE_SSTABLES_UNIT_KEY);
 
         uncheckedOptions = SizeTieredCompactionStrategyOptions.validateOptions(options, uncheckedOptions);
 

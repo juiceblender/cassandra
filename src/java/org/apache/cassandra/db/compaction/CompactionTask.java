@@ -55,23 +55,19 @@ public class CompactionTask extends AbstractCompactionTask
     protected final boolean keepOriginals;
     protected static long totalBytesCompacted = 0;
     private CompactionExecutorStatsCollector collector;
+    protected final boolean archivingCompaction;
 
     public CompactionTask(ColumnFamilyStore cfs, LifecycleTransaction txn, int gcBefore)
     {
-        this(cfs, txn, gcBefore, false);
+        this(cfs, txn, gcBefore, false, false);
     }
 
-    @Deprecated
-    public CompactionTask(ColumnFamilyStore cfs, LifecycleTransaction txn, int gcBefore, boolean offline, boolean keepOriginals)
-    {
-        this(cfs, txn, gcBefore, keepOriginals);
-    }
-
-    public CompactionTask(ColumnFamilyStore cfs, LifecycleTransaction txn, int gcBefore, boolean keepOriginals)
+    public CompactionTask(ColumnFamilyStore cfs, LifecycleTransaction txn, int gcBefore, boolean keepOriginals, boolean archivingCompaction)
     {
         super(cfs, txn);
         this.gcBefore = gcBefore;
         this.keepOriginals = keepOriginals;
+        this.archivingCompaction = archivingCompaction;
     }
 
     public static synchronized long addToTotalBytesCompacted(long bytesCompacted)
@@ -364,7 +360,9 @@ public class CompactionTask extends AbstractCompactionTask
             // At the moment it works at least regardless of whether the directory is hot or cold because
             // maxSSTableBytes is not related to the directory, only the strategy.
 
-            if(cfs.getDirectories().hasAvailableDiskSpace(estimatedSSTables, expectedWriteSize, Directories.DirectoryType.STANDARD))
+            Directories.DirectoryType directoryType = archivingCompaction ? Directories.DirectoryType.ARCHIVE : Directories.DirectoryType.STANDARD;
+
+            if(cfs.getDirectories().hasAvailableDiskSpace(estimatedSSTables, expectedWriteSize, directoryType))
                 break;
 
             if (!reduceScopeForLimitedSpace(nonExpiredSSTables, expectedWriteSize))

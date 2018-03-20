@@ -30,13 +30,11 @@ import org.apache.cassandra.io.sstable.format.SSTableReader;
 public class TimeWindowCompactionTask extends CompactionTask
 {
     private final boolean ignoreOverlaps;
-    private final boolean archivingCompaction;
 
     public TimeWindowCompactionTask(ColumnFamilyStore cfs, LifecycleTransaction txn, int gcBefore, boolean ignoreOverlaps, boolean archivingCompaction)
     {
-        super(cfs, txn, gcBefore);
+        super(cfs, txn, gcBefore, false, archivingCompaction);
         this.ignoreOverlaps = ignoreOverlaps;
-        this.archivingCompaction = archivingCompaction;
     }
 
     @Override
