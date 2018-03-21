@@ -143,30 +143,26 @@ public class ArchivingCompactionTest
         assertTrue(Files.walk(Paths.get(DatabaseDescriptor.getAllArchiveDataFileLocations()[0]).resolve(KEYSPACE1), 2).anyMatch(d -> d.toString().contains("Data.db")));
     }
 
+    //This test doesn't work at the moment because hacking getWriteableLocation will also hack archivingCompactionWriter
     @Test
+    @BMRule(name = "Make memtables flush to archive directory instead",
+    targetClass = "Directories",
+    targetMethod = "getWriteableLocation",
+    action = "$useArchivingDirectory = true")
     public void testCompactionActuallyHappensInArchivingDirectory() throws InterruptedException, IOException
     {
         final ColumnFamilyStore cfs = prepareCFS();
         TimeWindowCompactionStrategy twcs = createQuicklyExpiringTWCS(cfs, true);
         twcs.startup();
 
-        for (int i = 0; i < 3; i++)
+        for (int i = 0; i < 4; i++)
         {
-            createAndFlushSomeSSTables(cfs, 1, 12);
-            cfs.getLiveSSTables().forEach(twcs::addSSTable);
-            Thread.sleep(4000);
-
-            twcs.getNextBackgroundTask(FBUtilities.nowInSeconds()).execute(null);
-            System.out.println("Compacting iteration " + i);
+            createAndFlushSomeSSTables(cfs, 1, 60);
         }
 
-        // Wait for TTL to pass (Smallest valid time window available to TWCS is MINUTES, so we
-        // count on expiring SSTables instead of the actual bucket to check for compactions
-        Thread.sleep(9000);
-        final AbstractCompactionTask t = twcs.getNextBackgroundTask(FBUtilities.nowInSeconds());
-        t.execute(null);
+        cfs.getLiveSSTables().forEach(twcs::addSSTable);
+        twcs.getNextBackgroundTask(FBUtilities.nowInSeconds()).execute(null);
 
-        // The end result is that the compacted SSTables ends up back in the archived directory.
         assertFalse(Files.walk(Paths.get(DatabaseDescriptor.getAllStandardDataFileLocations()[0]).resolve(KEYSPACE1), 2).anyMatch(d -> d.toString().contains("Data.db")));
     }
 
