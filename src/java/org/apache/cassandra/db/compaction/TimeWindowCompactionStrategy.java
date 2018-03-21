@@ -39,6 +39,7 @@ import org.apache.cassandra.db.ColumnFamilyStore;
 import org.apache.cassandra.db.lifecycle.SSTableSet;
 import org.apache.cassandra.db.lifecycle.LifecycleTransaction;
 import org.apache.cassandra.exceptions.ConfigurationException;
+import org.apache.cassandra.io.sstable.SSTable;
 import org.apache.cassandra.io.sstable.format.SSTableReader;
 import org.apache.cassandra.schema.CompactionParams;
 import org.apache.cassandra.utils.Pair;
@@ -54,6 +55,7 @@ public class TimeWindowCompactionStrategy extends AbstractCompactionStrategy
     private final Set<SSTableReader> sstables = new HashSet<>();
     private long lastExpiredCheck;
     private long highestWindowSeen;
+    private boolean archiveDisabled;
 
     public TimeWindowCompactionStrategy(ColumnFamilyStore cfs, Map<String, String> options)
     {
@@ -67,6 +69,7 @@ public class TimeWindowCompactionStrategy extends AbstractCompactionStrategy
         }
         else
             logger.debug("Enabling tombstone compactions for TWCS");
+        this.archiveDisabled = !(this.options.archiveSSTablesAfterSize > 0) || DatabaseDescriptor.getAllArchiveDataFileLocations() == null;
     }
 
     @Override
@@ -168,8 +171,12 @@ public class TimeWindowCompactionStrategy extends AbstractCompactionStrategy
         return Collections.singletonList(Collections.min(sstablesWithTombstones, SSTableReader.sizeComparator));
     }
 
+    private static boolean isOldEnoughToArchive(SSTableReader sstable, long now) {
+        return !sstable.isInArchivingDirectory() && sstable.getMaxTimestamp() < now;
+    }
+
     private List<SSTableReader> getArchivableSSTables() {
-        if (!(options.archiveSSTablesAfterSize > 0) || DatabaseDescriptor.getAllArchiveDataFileLocations() == null) {
+        if (archiveDisabled) {
             return Collections.emptyList();
         }
 
@@ -181,7 +188,7 @@ public class TimeWindowCompactionStrategy extends AbstractCompactionStrategy
 
         Set<SSTableReader> candidates = Sets.newHashSet(filterSuspectSSTables(uncompacting));
 
-        return ImmutableList.copyOf(filter(candidates, candidate -> !candidate.isInArchivingDirectory() && candidate.getMaxTimestamp() < now));
+        return ImmutableList.copyOf(filter(candidates, candidate -> isOldEnoughToArchive(candidate, now)));
     }
 
     private List<SSTableReader> getCompactionCandidates(Iterable<SSTableReader> candidateSSTables)
@@ -289,13 +296,26 @@ public class TimeWindowCompactionStrategy extends AbstractCompactionStrategy
         int n = 0;
         long now = this.highestWindowSeen;
 
+
         for(Long key : tasks.keySet())
         {
             // For current window, make sure it's compactable
             if (key.compareTo(now) >= 0 && tasks.get(key).size() >= cfs.getMinimumCompactionThreshold())
+            {
                 n++;
+
+                //These are just estimates - we don't know how many SSTables the final compaction would generate
+                //That are eligible for archiving. We do know that all compactions will happen first before
+                //Archiving happens
+                if (!archiveDisabled && tasks.get(key).stream().anyMatch(c -> isOldEnoughToArchive(c, now)))
+                    n++;
+            }
             else if (key.compareTo(now) < 0 && tasks.get(key).size() >= 2)
+            {
                 n++;
+                if (!archiveDisabled && tasks.get(key).stream().anyMatch(c -> isOldEnoughToArchive(c, now)))
+                    n++;
+            }
         }
         this.estimatedRemainingTasks = n;
     }

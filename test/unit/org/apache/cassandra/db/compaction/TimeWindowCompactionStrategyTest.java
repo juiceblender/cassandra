@@ -17,12 +17,8 @@
  */
 package org.apache.cassandra.db.compaction;
 
-import java.io.IOException;
 import java.nio.ByteBuffer;
-import java.nio.file.Files;
-import java.nio.file.Paths;
 import java.util.ArrayList;
-import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -35,24 +31,26 @@ import org.junit.Test;
 
 import org.apache.cassandra.SchemaLoader;
 import org.apache.cassandra.Util;
-import org.apache.cassandra.config.DatabaseDescriptor;
 import org.apache.cassandra.db.ColumnFamilyStore;
 import org.apache.cassandra.db.DecoratedKey;
 import org.apache.cassandra.db.Keyspace;
 import org.apache.cassandra.db.RowUpdateBuilder;
 import org.apache.cassandra.exceptions.ConfigurationException;
 import org.apache.cassandra.io.sstable.format.SSTableReader;
-import org.apache.cassandra.schema.CompactionParams;
 import org.apache.cassandra.schema.KeyspaceParams;
-import org.apache.cassandra.utils.FBUtilities;
 import org.apache.cassandra.utils.Pair;
 
 import static org.apache.cassandra.db.compaction.TimeWindowCompactionStrategy.getWindowBoundsInMillis;
 import static org.apache.cassandra.db.compaction.TimeWindowCompactionStrategy.newestBucket;
 import static org.apache.cassandra.db.compaction.TimeWindowCompactionStrategy.validateOptions;
-import static org.apache.cassandra.db.compaction.TimeWindowCompactionStrategyOptions.*;
+import static org.apache.cassandra.db.compaction.TimeWindowCompactionStrategyOptions.ARCHIVE_SSTABLES_SIZE_KEY;
+import static org.apache.cassandra.db.compaction.TimeWindowCompactionStrategyOptions.COMPACTION_WINDOW_SIZE_KEY;
+import static org.apache.cassandra.db.compaction.TimeWindowCompactionStrategyOptions.COMPACTION_WINDOW_UNIT_KEY;
+import static org.apache.cassandra.db.compaction.TimeWindowCompactionStrategyOptions.EXPIRED_SSTABLE_CHECK_FREQUENCY_SECONDS_KEY;
+import static org.apache.cassandra.db.compaction.TimeWindowCompactionStrategyOptions.TIMESTAMP_RESOLUTION_KEY;
+import static org.apache.cassandra.db.compaction.TimeWindowCompactionStrategyOptions.UNSAFE_AGGRESSIVE_SSTABLE_EXPIRATION_KEY;
+import static org.apache.cassandra.db.compaction.TimeWindowCompactionStrategyOptions.UNSAFE_AGGRESSIVE_SSTABLE_EXPIRATION_PROPERTY;
 import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
@@ -345,131 +343,11 @@ public class TimeWindowCompactionStrategyTest extends SchemaLoader
         t.transaction.abort();
     }
 
-    @SuppressWarnings("ConstantConditions")
-    @Test
-    public void testArchivingSSTables() throws IOException, InterruptedException
-    {
-        final ColumnFamilyStore cfs = prepareCFS();
-
-        final ByteBuffer value = ByteBuffer.wrap(new byte[100]);
-        final DecoratedKey key = Util.dk("archived");
-        new RowUpdateBuilder(cfs.metadata(), System.currentTimeMillis(), key.getKey())
-        .clustering("column").add("val", value).build().applyUnsafe();
-
-        cfs.forceBlockingFlush();
-
-        // Verify that the newly flushed SSTable is not present in the archive directory
-        // We use max depth of 2 to omit backup/snapshot directories
-        assertFalse(Files.walk(Paths.get(DatabaseDescriptor.getAllArchiveDataFileLocations()[0]).resolve(KEYSPACE1), 2).anyMatch(d -> d.toString().contains("Data.db")));
-        assertTrue(Files.walk(Paths.get(DatabaseDescriptor.getAllStandardDataFileLocations()[0]).resolve(KEYSPACE1), 2).anyMatch(d -> d.toString().contains("Data.db")));
-
-        TimeWindowCompactionStrategy twcs = createQuicklyExpiringTWCS(cfs);
-        cfs.getLiveSSTables().forEach(twcs::addSSTable);
-        twcs.startup();
-
-        // There's just a single SSTable with no tombstones and it hasn't passed archive time yet, so we expect
-        // to have no compaction tasks.
-        assertNull(twcs.getNextBackgroundTask(FBUtilities.nowInSeconds()));
-
-        Thread.sleep(4000);
-        AbstractCompactionTask t = twcs.getNextBackgroundTask(FBUtilities.nowInSeconds());
-
-        // It's now past the archive time window, so we expect there to be a compaction task to write to archive
-        assertNotNull(t);
-        t.execute(null);
-
-        assertTrue(Files.walk(Paths.get(DatabaseDescriptor.getAllArchiveDataFileLocations()[0]).resolve(KEYSPACE1), 2).anyMatch(d -> d.toString().contains("Data.db")));
-    }
-
-    @Test
-    public void testTWCSCompactionGetsPriorityFirstOverArchiving() throws IOException, InterruptedException
-    {
-        final ColumnFamilyStore cfs = prepareCFS();
-        createAndFlushSomeSSTables(cfs, 4, 15);
-        TimeWindowCompactionStrategy twcs = createQuicklyExpiringTWCS(cfs);
-
-        cfs.getLiveSSTables().forEach(twcs::addSSTable);
-        twcs.startup();
-
-        // Wait for the archiving time window to be reached
-        Thread.sleep(4000);
-
-        AbstractCompactionTask t = twcs.getNextBackgroundTask(FBUtilities.nowInSeconds());
-
-        // It's now past the archive time window, so there could be an archiving compaction
-        // but we are not expecting anything in archive because normal TWCS compaction gets priority
-        // We use max depth of 2 to omit backup/snapshot directories
-        assertNotNull(t);
-        t.execute(null);
-        assertFalse(Files.walk(Paths.get(DatabaseDescriptor.getAllArchiveDataFileLocations()[0]).resolve(KEYSPACE1), 2).anyMatch(d -> d.toString().contains("Data.db")));
-
-        cfs.getLiveSSTables().forEach(twcs::addSSTable);
-        t = twcs.getNextBackgroundTask(FBUtilities.nowInSeconds());
-        t.execute(null);
-
-        // We now expect TWCS to archive the remaining SSTables
-        assertTrue(Files.walk(Paths.get(DatabaseDescriptor.getAllArchiveDataFileLocations()[0]).resolve(KEYSPACE1), 2).anyMatch(d -> d.toString().contains("Data.db")));
-    }
-
-    @Test
-    public void testCompactionActuallyHappensInArchivingDirectory() throws InterruptedException, IOException
-    {
-        final ColumnFamilyStore cfs = prepareCFS();
-        TimeWindowCompactionStrategy twcs = createQuicklyExpiringTWCS(cfs);
-        twcs.startup();
-
-        for (int i = 0; i < 3; i++)
-        {
-            createAndFlushSomeSSTables(cfs, 1, 12);
-            cfs.getLiveSSTables().forEach(twcs::addSSTable);
-            Thread.sleep(4000);
-
-            twcs.getNextBackgroundTask(FBUtilities.nowInSeconds()).execute(null);
-            System.out.println("Compacting iteration " + i);
-        }
-
-        // Wait for TTL to pass (Smallest valid time window available to TWCS is MINUTES, so we
-        // count on expiring SSTables instead of the actual bucket to check for compactions
-        Thread.sleep(9000);
-        final AbstractCompactionTask t = twcs.getNextBackgroundTask(FBUtilities.nowInSeconds());
-        t.execute(null);
-
-        // The end result is that the compacted SSTables ends up back in the archived directory.
-        assertFalse(Files.walk(Paths.get(DatabaseDescriptor.getAllStandardDataFileLocations()[0]).resolve(KEYSPACE1), 2).anyMatch(d -> d.toString().contains("Data.db")));
-    }
-
-    private ColumnFamilyStore prepareCFS() {
+    static ColumnFamilyStore prepareCFS() {
         Keyspace keyspace = Keyspace.open(KEYSPACE1);
         ColumnFamilyStore cfs = keyspace.getColumnFamilyStore(CF_STANDARD1);
         cfs.truncateBlocking();
         cfs.disableAutoCompaction();
         return cfs;
-    }
-
-    private void createAndFlushSomeSSTables(ColumnFamilyStore cfs, int numberOfSSTables, int ttl) {
-        final ByteBuffer value = ByteBuffer.wrap(new byte[100]);
-        for (int i = 0; i < numberOfSSTables; i++)
-        {
-            DecoratedKey key = Util.dk(String.valueOf("expired"));
-            new RowUpdateBuilder(cfs.metadata(), System.currentTimeMillis(), ttl, key.getKey())
-            .clustering("column")
-            .add("val", value).build().applyUnsafe();
-
-            cfs.forceBlockingFlush();
-        }
-    }
-
-    private TimeWindowCompactionStrategy createQuicklyExpiringTWCS(ColumnFamilyStore cfs) {
-        Map<String, String> options = new HashMap<>();
-
-        options.put(COMPACTION_WINDOW_SIZE_KEY, "1");
-        options.put(COMPACTION_WINDOW_UNIT_KEY, "MINUTES");
-        options.put(TIMESTAMP_RESOLUTION_KEY, "MILLISECONDS");
-        options.put(ARCHIVE_SSTABLES_SIZE_KEY, "3");
-        options.put(ARCHIVE_SSTABLES_UNIT_KEY, "SECONDS");
-        options.put(EXPIRED_SSTABLE_CHECK_FREQUENCY_SECONDS_KEY, "0");
-        options.put(CompactionParams.Option.MIN_THRESHOLD.toString(), "2");
-
-        return new TimeWindowCompactionStrategy(cfs, options);
     }
 }
