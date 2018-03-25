@@ -39,9 +39,10 @@ public class ArchivingTimeWindowCompactionWriter extends CompactionAwareWriter
         super(cfs, directories, txn, nonExpiredSSTables, keepOriginals, useArchiveDirectory);
         long totalSize = cfs.getExpectedCompactedFileSize(txn.originals(), OperationType.COMPACTION);
 
+        Directories.DirectoryType directoryType = useArchiveDirectory ? Directories.DirectoryType.ARCHIVE : Directories.DirectoryType.STANDARD;
         //This one uses the directory based on whether TWCS has decided it is archive or not
         @SuppressWarnings("resource")
-        SSTableWriter writer = SSTableWriter.create(cfs.newSSTableDescriptor(getDirectories().getLocationForDisk(getDirectories().getWriteableLocation(totalSize, useArchiveDirectory))),
+        SSTableWriter writer = SSTableWriter.create(cfs.newSSTableDescriptor(getDirectories().getLocationForDisk(getDirectories().getWriteableLocation(totalSize, directoryType))),
                                                     estimatedTotalKeys,
                                                     minRepairedAt,
                                                     pendingRepair,

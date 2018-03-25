@@ -147,9 +147,9 @@ public class ArchivingCompactionTest
     @Test
     @BMRule(name = "Make memtables flush to archive directory instead",
     targetClass = "Directories",
-    targetMethod = "getWriteableLocation",
-    action = "$useArchivingDirectory = true")
-    public void testCompactionActuallyHappensInArchivingDirectory() throws InterruptedException, IOException
+    targetMethod = "getWriteableLocationAsFile",
+    action = "$directoryType = Directories$DirectoryType.ARCHIVE")
+    public void testCompactionPutsArchivedSSTablesBackIntoArchive() throws InterruptedException, IOException
     {
         final ColumnFamilyStore cfs = prepareCFS();
         TimeWindowCompactionStrategy twcs = createQuicklyExpiringTWCS(cfs, true);

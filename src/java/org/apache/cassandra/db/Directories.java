@@ -369,15 +369,18 @@ public class Directories
         return getWriteableLocationAsFile(-1L);
     }
 
+    public File getWriteableLocationAsFile(long writeSize) {
+        return getWriteableLocationAsFile(writeSize, DirectoryType.STANDARD);
+    }
+
     /**
      * Returns a non-blacklisted data directory that _currently_ has {@code writeSize} bytes as usable space.
      *
      * @throws FSWriteError if all directories are blacklisted.
      */
-    public File getWriteableLocationAsFile(long writeSize)
+    public File getWriteableLocationAsFile(long writeSize, DirectoryType directoryType)
     {
-        final DataDirectory writeableLocation = getWriteableLocation(writeSize);
-        File location = getLocationForDisk(getWriteableLocation(writeSize));
+        File location = getLocationForDisk(getWriteableLocation(writeSize, directoryType));
         if (location == null)
             throw new FSWriteError(new IOException("No configured data directory contains enough space to write " + writeSize + " bytes"), "");
         return location;
@@ -418,7 +421,7 @@ public class Directories
      * @throws FSWriteError if all directories are blacklisted.
      */
     public DataDirectory getWriteableLocation(long writeSize) {
-        return getWriteableLocation(writeSize, false);
+        return getWriteableLocation(writeSize, DirectoryType.STANDARD);
     }
 
     public static DirectoryType directoryTypeForSSTable(SSTableReader sstable) {
@@ -435,14 +438,14 @@ public class Directories
      *
      * @throws FSWriteError if all directories are blacklisted.
      */
-    public DataDirectory getWriteableLocation(long writeSize, boolean useArchivingDirectory)
+    public DataDirectory getWriteableLocation(long writeSize, DirectoryType directoryType)
     {
         List<DataDirectoryCandidate> candidates = new ArrayList<>();
 
         long totalAvailable = 0L;
 
         //Should this be using paths instead of standardDataDirectories? What if it's supposed to be using archiveDataDirectories?
-        DataDirectory[] dataDirectories = useArchivingDirectory ? archivePaths : paths;
+        DataDirectory[] dataDirectories = directoryType == DirectoryType.ARCHIVE ? archivePaths : paths;
 
         // pick directories with enough space and so that resulting sstable dirs aren't blacklisted for writes.
         boolean tooBig = false;

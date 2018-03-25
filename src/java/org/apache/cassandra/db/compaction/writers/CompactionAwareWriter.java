@@ -65,7 +65,8 @@ public abstract class CompactionAwareWriter extends Transactional.AbstractTransa
     private final List<Directories.DataDirectory> locations;
     private final List<PartitionPosition> diskBoundaries;
     private int locationIndex;
-    private final boolean archiving; //Whether or not this writer is meant to write from hot to cold. This should still be false if it's a compaction within the cold disk
+    //Whether or not the writer is meant to write to archive.
+    private final boolean archiving;
 
     @Deprecated
     public CompactionAwareWriter(ColumnFamilyStore cfs,
@@ -223,7 +224,7 @@ public abstract class CompactionAwareWriter extends Transactional.AbstractTransa
             if (DatabaseDescriptor.getAllArchiveDataFileLocations() == null)
                 throw new ConfigurationException("There is no archive directory available in the YAML; you have to configure it before being able to make use of archiving cold disks.");
 
-            d = getDirectories().getWriteableLocation(estimatedWriteSize, true);
+            d = getDirectories().getWriteableLocation(estimatedWriteSize, Directories.DirectoryType.ARCHIVE);
         } else
         {
             File directory = null;

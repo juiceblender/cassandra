@@ -30,11 +30,14 @@ import org.apache.cassandra.io.sstable.format.SSTableReader;
 public class TimeWindowCompactionTask extends CompactionTask
 {
     private final boolean ignoreOverlaps;
+    private final boolean useArchiveDirectory;
 
-    public TimeWindowCompactionTask(ColumnFamilyStore cfs, LifecycleTransaction txn, int gcBefore, boolean ignoreOverlaps, boolean archivingCompaction)
+    public TimeWindowCompactionTask(ColumnFamilyStore cfs, LifecycleTransaction txn, int gcBefore, boolean ignoreOverlaps,
+                                    boolean useArchiveDirectory)
     {
-        super(cfs, txn, gcBefore, false, archivingCompaction);
+        super(cfs, txn, gcBefore, false);
         this.ignoreOverlaps = ignoreOverlaps;
+        this.useArchiveDirectory = useArchiveDirectory;
     }
 
     @Override
@@ -49,6 +52,11 @@ public class TimeWindowCompactionTask extends CompactionTask
                                                           LifecycleTransaction transaction,
                                                           Set<SSTableReader> nonExpiredSSTables)
     {
-        return new ArchivingTimeWindowCompactionWriter(cfs, directories, transaction, nonExpiredSSTables, keepOriginals, archivingCompaction);
+        return new ArchivingTimeWindowCompactionWriter(cfs, directories, transaction, nonExpiredSSTables, keepOriginals, useArchiveDirectory);
+    }
+
+    @Override
+    protected Directories.DirectoryType directoryTypeForCompaction() {
+        return this.useArchiveDirectory ? Directories.DirectoryType.ARCHIVE : Directories.DirectoryType.STANDARD;
     }
 }

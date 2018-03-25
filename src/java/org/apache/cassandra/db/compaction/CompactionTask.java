@@ -55,19 +55,17 @@ public class CompactionTask extends AbstractCompactionTask
     protected final boolean keepOriginals;
     protected static long totalBytesCompacted = 0;
     private CompactionExecutorStatsCollector collector;
-    protected final boolean archivingCompaction;
 
     public CompactionTask(ColumnFamilyStore cfs, LifecycleTransaction txn, int gcBefore)
     {
-        this(cfs, txn, gcBefore, false, false);
+        this(cfs, txn, gcBefore, false);
     }
 
-    public CompactionTask(ColumnFamilyStore cfs, LifecycleTransaction txn, int gcBefore, boolean keepOriginals, boolean archivingCompaction)
+    public CompactionTask(ColumnFamilyStore cfs, LifecycleTransaction txn, int gcBefore, boolean keepOriginals)
     {
         super(cfs, txn);
         this.gcBefore = gcBefore;
         this.keepOriginals = keepOriginals;
-        this.archivingCompaction = archivingCompaction;
     }
 
     public static synchronized long addToTotalBytesCompacted(long bytesCompacted)
@@ -333,13 +331,20 @@ public class CompactionTask extends AbstractCompactionTask
         return ids.iterator().next();
     }
 
+    protected Directories.DirectoryType directoryTypeForCompaction() {
+        return Directories.DirectoryType.STANDARD;
+    }
+
+    protected void buildCompactionCandidatesForAvailableDiskSpace(final Set<SSTableReader> fullyExpiredSSTables) {
+        buildCompactionCandidatesForAvailableDiskSpace(fullyExpiredSSTables, directoryTypeForCompaction());
+    }
 
     /*
      * Checks if we have enough disk space to execute the compaction.  Drops the largest sstable out of the Task until
      * there's enough space (in theory) to handle the compaction.  Does not take into account space that will be taken by
      * other compactions.
      */
-    protected void buildCompactionCandidatesForAvailableDiskSpace(final Set<SSTableReader> fullyExpiredSSTables)
+    protected void buildCompactionCandidatesForAvailableDiskSpace(final Set<SSTableReader> fullyExpiredSSTables, final Directories.DirectoryType directoryType)
     {
         if(!cfs.isCompactionDiskSpaceCheckEnabled() && compactionType == OperationType.COMPACTION)
         {
@@ -359,8 +364,6 @@ public class CompactionTask extends AbstractCompactionTask
             //If this is an archiving compaction, it should be checking the archive directory, not the hot one.
             // At the moment it works at least regardless of whether the directory is hot or cold because
             // maxSSTableBytes is not related to the directory, only the strategy.
-
-            Directories.DirectoryType directoryType = archivingCompaction ? Directories.DirectoryType.ARCHIVE : Directories.DirectoryType.STANDARD;
 
             if(cfs.getDirectories().hasAvailableDiskSpace(estimatedSSTables, expectedWriteSize, directoryType))
                 break;

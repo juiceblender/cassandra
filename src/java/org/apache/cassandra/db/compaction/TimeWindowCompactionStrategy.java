@@ -39,7 +39,6 @@ import org.apache.cassandra.db.ColumnFamilyStore;
 import org.apache.cassandra.db.lifecycle.SSTableSet;
 import org.apache.cassandra.db.lifecycle.LifecycleTransaction;
 import org.apache.cassandra.exceptions.ConfigurationException;
-import org.apache.cassandra.io.sstable.SSTable;
 import org.apache.cassandra.io.sstable.format.SSTableReader;
 import org.apache.cassandra.schema.CompactionParams;
 import org.apache.cassandra.utils.Pair;
@@ -55,7 +54,7 @@ public class TimeWindowCompactionStrategy extends AbstractCompactionStrategy
     private final Set<SSTableReader> sstables = new HashSet<>();
     private long lastExpiredCheck;
     private long highestWindowSeen;
-    private boolean archiveDisabled;
+    private final boolean archivingEnabled; //Whether or not archiving is actually enabled based on TWCS Params
 
     public TimeWindowCompactionStrategy(ColumnFamilyStore cfs, Map<String, String> options)
     {
@@ -69,7 +68,7 @@ public class TimeWindowCompactionStrategy extends AbstractCompactionStrategy
         }
         else
             logger.debug("Enabling tombstone compactions for TWCS");
-        this.archiveDisabled = !(this.options.archiveSSTablesAfterSize > 0) || DatabaseDescriptor.getAllArchiveDataFileLocations() == null;
+        this.archivingEnabled = this.options.archiveSSTablesAfterSize > 0 && DatabaseDescriptor.getAllArchiveDataFileLocations() != null;
     }
 
     @Override
@@ -95,9 +94,23 @@ public class TimeWindowCompactionStrategy extends AbstractCompactionStrategy
 
                 LifecycleTransaction modifier = cfs.getTracker().tryModify(latestBucket, OperationType.COMPACTION);
                 if (modifier != null)
-                    return new TimeWindowCompactionTask(cfs, modifier, gcBefore, options.ignoreOverlaps, false);
+                {
+                    if (!archivingEnabled) //If somebody turns off archiving, it always gets put into unarchive
+                        return new TimeWindowCompactionTask(cfs, modifier, gcBefore, options.ignoreOverlaps, false);
+
+                    else {
+                        if (latestBucket.iterator().next().isInArchivingDirectory()) //If it's already in archive put it back into archive, this can happen for thw twcs instance living in the archive directory
+                            return new TimeWindowCompactionTask(cfs, modifier, gcBefore, options.ignoreOverlaps, true);
+
+                        //normal twcs living in the hot directory
+                        return new TimeWindowCompactionTask(cfs, modifier, gcBefore, options.ignoreOverlaps, false);
+                    }
+                }
                 previousCandidate = latestBucket;
-            } else {
+            } else { //If it happens that the user has decided on a set of parameters such that there's actually *no* SSTables to compact, but there are SSTables to archive
+                if (!archivingEnabled)
+                    return null;
+
                 List<SSTableReader> archivableSSTables = getArchivableSSTables();
                 if (archivableSSTables.isEmpty())
                     return null;
@@ -176,11 +189,7 @@ public class TimeWindowCompactionStrategy extends AbstractCompactionStrategy
     }
 
     private List<SSTableReader> getArchivableSSTables() {
-        if (archiveDisabled) {
-            return Collections.emptyList();
-        }
-
-        final long now = System.currentTimeMillis() - TimeUnit.MILLISECONDS.convert(options.archiveSSTablesAfterSize, options.archiveSSTablesAfterUnit);
+        final long now = System.currentTimeMillis() - TimeUnit.MILLISECONDS.convert(this.options.archiveSSTablesAfterSize, this.options.archiveSSTablesAfterUnit);
         Set<SSTableReader> uncompacting = ImmutableSet.copyOf(filter(cfs.getUncompactingSSTables(), sstables::contains));
 
         if (uncompacting.stream().findAny().isPresent() && uncompacting.stream().findAny().get().isInArchivingDirectory())
@@ -307,13 +316,13 @@ public class TimeWindowCompactionStrategy extends AbstractCompactionStrategy
                 //These are just estimates - we don't know how many SSTables the final compaction would generate
                 //That are eligible for archiving. We do know that all compactions will happen first before
                 //Archiving happens
-                if (!archiveDisabled && tasks.get(key).stream().anyMatch(c -> isOldEnoughToArchive(c, now)))
+                if (archivingEnabled && tasks.get(key).stream().anyMatch(c -> isOldEnoughToArchive(c, now)))
                     n++;
             }
             else if (key.compareTo(now) < 0 && tasks.get(key).size() >= 2)
             {
                 n++;
-                if (!archiveDisabled && tasks.get(key).stream().anyMatch(c -> isOldEnoughToArchive(c, now)))
+                if (archivingEnabled && tasks.get(key).stream().anyMatch(c -> isOldEnoughToArchive(c, now)))
                     n++;
             }
         }
@@ -393,7 +402,7 @@ public class TimeWindowCompactionStrategy extends AbstractCompactionStrategy
         LifecycleTransaction txn = cfs.getTracker().tryModify(filteredSSTables, OperationType.COMPACTION);
         if (txn == null)
             return null;
-        return Collections.singleton(new TimeWindowCompactionTask(cfs, txn, gcBefore, options.ignoreOverlaps, false));
+        return Collections.singleton(new TimeWindowCompactionTask(cfs, txn, gcBefore, options.ignoreOverlaps, archivingEnabled));
     }
 
     @Override
@@ -409,7 +418,7 @@ public class TimeWindowCompactionStrategy extends AbstractCompactionStrategy
             return null;
         }
 
-        return new TimeWindowCompactionTask(cfs, modifier, gcBefore, options.ignoreOverlaps, false).setUserDefined(true);
+        return new TimeWindowCompactionTask(cfs, modifier, gcBefore, options.ignoreOverlaps, archivingEnabled).setUserDefined(true);
     }
 
     public int getEstimatedRemainingTasks()
@@ -422,6 +431,16 @@ public class TimeWindowCompactionStrategy extends AbstractCompactionStrategy
         return Long.MAX_VALUE;
     }
 
+    public static long getMaxTimestamp(Collection<SSTableReader> sstables)
+    {
+        long max = 0;
+        for (SSTableReader sstable : sstables)
+        {
+            if (sstable.getMaxTimestamp() > max)
+                max = sstable.getMaxTimestamp();
+        }
+        return max;
+    }
 
     public static Map<String, String> validateOptions(Map<String, String> options) throws ConfigurationException
     {
