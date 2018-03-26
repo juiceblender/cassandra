@@ -19,11 +19,14 @@
 package org.apache.cassandra.db.compaction.writers;
 
 import java.io.File;
+import java.util.Arrays;
 import java.util.Collection;
 import java.util.List;
 import java.util.Set;
 import java.util.UUID;
+import java.util.stream.StreamSupport;
 
+import com.google.common.collect.Streams;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -220,12 +223,24 @@ public abstract class CompactionAwareWriter extends Transactional.AbstractTransa
     public Directories.DataDirectory getWriteDirectory(Iterable<SSTableReader> sstables, long estimatedWriteSize)
     {
         Directories.DataDirectory d;
-        if (archiving) {
+        if (archiving)
+        {
             if (DatabaseDescriptor.getAllArchiveDataFileLocations() == null)
                 throw new ConfigurationException("There is no archive directory available in the YAML; you have to configure it before being able to make use of archiving cold disks.");
 
             d = getDirectories().getWriteableLocation(estimatedWriteSize, Directories.DirectoryType.ARCHIVE);
-        } else
+        } else if (sstablesAreInArchiveDirectory(sstables))
+        /*
+        If SSTables are in archive directory but the writer is *not meant to* write to archive,
+        then we cannot rely on the method below because it will just place everything back into archive.
+        So we just take a standard directory...although looking at the code below, is it redundant? Why do we need it?
+        Why all the disk space checking when it is already handled in getWriteableLocation?
+        */
+        {
+            d = getDirectories().getWriteableLocation(estimatedWriteSize, Directories.DirectoryType.STANDARD);
+            logger.info("Found sstables in archive but archiving is not enabled. Compacting them back into standard directory {}", d);
+        }
+        else
         {
             File directory = null;
             for (SSTableReader sstable : sstables)
@@ -256,6 +271,10 @@ public abstract class CompactionAwareWriter extends Transactional.AbstractTransa
             throw new RuntimeException(String.format("Not enough disk space to store %s",
                                                      FBUtilities.prettyPrintMemory(estimatedWriteSize)));
         return d;
+    }
+
+    public boolean sstablesAreInArchiveDirectory(final Iterable<SSTableReader> sstables) {
+        return Streams.stream(sstables).anyMatch(SSTableReader::isInArchivingDirectory);
     }
 
     public CompactionAwareWriter setRepairedAt(long repairedAt)

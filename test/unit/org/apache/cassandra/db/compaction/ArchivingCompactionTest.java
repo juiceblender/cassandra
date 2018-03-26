@@ -143,9 +143,8 @@ public class ArchivingCompactionTest
         assertTrue(Files.walk(Paths.get(DatabaseDescriptor.getAllArchiveDataFileLocations()[0]).resolve(KEYSPACE1), 2).anyMatch(d -> d.toString().contains("Data.db")));
     }
 
-    //This test doesn't work at the moment because hacking getWriteableLocation will also hack archivingCompactionWriter
     @Test
-    @BMRule(name = "Make memtables flush to archive directory instead",
+    @BMRule(name = "Make memtables flush to archive directory instead to save time",
     targetClass = "Directories",
     targetMethod = "getWriteableLocationAsFile",
     action = "$directoryType = Directories$DirectoryType.ARCHIVE")
@@ -185,6 +184,27 @@ public class ArchivingCompactionTest
         //Though it's past the archiving window, there are no archive directories so there is nothing to archive and
         //nothing to compact. So we expect t to be null.
         assertNull(t);
+    }
+
+    @Test
+    @BMRule(name = "Make memtables flush to archive directory instead to save time",
+    targetClass = "Directories",
+    targetMethod = "getWriteableLocationAsFile",
+    action = "$directoryType = Directories$DirectoryType.ARCHIVE")
+    public void testDisablingArchivingCompactionsMovesCompactedSSTableBackToStandard() throws IOException
+    {
+        final ColumnFamilyStore cfs = prepareCFS();
+        TimeWindowCompactionStrategy twcs  = createQuicklyExpiringTWCS(cfs, false);
+        twcs.startup();
+
+        for (int i = 0; i < 4; i++)
+        {
+            createAndFlushSomeSSTables(cfs, 1, 60);
+        }
+
+        cfs.getLiveSSTables().forEach(twcs::addSSTable);
+        twcs.getNextBackgroundTask(FBUtilities.nowInSeconds()).execute(null);
+        assertTrue(Files.walk(Paths.get(DatabaseDescriptor.getAllStandardDataFileLocations()[0]).resolve(KEYSPACE1), 2).anyMatch(d -> d.toString().contains("Data.db")));
     }
 
     @Test
