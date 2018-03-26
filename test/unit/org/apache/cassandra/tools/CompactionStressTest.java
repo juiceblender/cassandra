@@ -44,7 +44,7 @@ public class CompactionStressTest extends ToolsTester
         runTool(0,
                 "org.apache.cassandra.stress.CompactionStress",
                 "write",
-                "-d", "build/test/cassandra/data",
+                "-d", "build/test/cassandra",
                 "-g", "0",
                 "-p", profileFile,
                 "-t", "4");
@@ -52,7 +52,7 @@ public class CompactionStressTest extends ToolsTester
         runTool(0,
                 "org.apache.cassandra.stress.CompactionStress",
                 "compact",
-                "-d", "build/test/cassandra/data",
+                "-d", "build/test/cassandra",
                 "-p", profileFile,
                 "-t", "4");
     }

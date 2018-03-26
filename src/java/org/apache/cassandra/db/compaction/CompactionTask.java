@@ -361,7 +361,6 @@ public class CompactionTask extends AbstractCompactionTask
             // Only consider write size of non expired SSTables
             long expectedWriteSize = cfs.getExpectedCompactedFileSize(nonExpiredSSTables, compactionType);
             long estimatedSSTables = Math.max(1, expectedWriteSize / strategy.getMaxSSTableBytes());
-            //If this is an archiving compaction, it should be checking the archive directory, not the hot one.
             // At the moment it works at least regardless of whether the directory is hot or cold because
             // maxSSTableBytes is not related to the directory, only the strategy.
 
