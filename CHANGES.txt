@@ -1,4 +1,12 @@
 4.0
+ * Fix scheduling of speculative retry threshold recalculation (CASSANDRA-14338)
+ * Add support for hybrid MIN(), MAX() speculative retry policies (CASSANDRA-14293)
+ * Correct and clarify SSLFactory.getSslContext method and call sites (CASSANDRA-14314)
+ * Handle static and partition deletion properly on ThrottledUnfilteredIterator (CASSANDRA-14315)
+ * NodeTool clientstats should show SSL Cipher (CASSANDRA-14322)
+ * Add ability to specify driver name and version (CASSANDRA-14275)
+ * Abstract streaming for pluggable storage (CASSANDRA-14115)
+ * Forced incremental repairs should promote sstables if they can (CASSANDRA-14294)
  * Use Murmur3 for validation compactions (CASSANDRA-14002)
  * Comma at the end of the seed list is interpretated as localhost (CASSANDRA-14285)
  * Refactor read executor and response resolver, abstract read repair (CASSANDRA-14058)
@@ -200,9 +208,18 @@
 
 
 3.11.3
- * RateBasedBackPressure unnecessarily invokes a lock on the Guava RateLimiter  (CASSANDRA-14163)
+ * SASI tokenizer for simple delimiter based entries (CASSANDRA-14247)
+ * Fix Loss of digits when doing CAST from varint/bigint to decimal (CASSANDRA-14170)
+ * RateBasedBackPressure unnecessarily invokes a lock on the Guava RateLimiter (CASSANDRA-14163)
  * Fix wildcard GROUP BY queries (CASSANDRA-14209)
 Merged from 3.0:
+ * Handle repeat open bound from SRP in read repair (CASSANDRA-14330)
+ * Use zero as default score in DynamicEndpointSnitch (CASSANDRA-14252)
+ * Respect max hint window when hinting for LWT (CASSANDRA-14215)
+ * Adding missing WriteType enum values to v3, v4, and v5 spec (CASSANDRA-13697)
+ * Don't regenerate bloomfilter and summaries on startup (CASSANDRA-11163)
+ * Fix NPE when performing comparison against a null frozen in LWT (CASSANDRA-14087)
+ * Log when SSTables are deleted (CASSANDRA-14302)
  * Fix batch commitlog sync regression (CASSANDRA-14292)
  * Write to pending endpoint when view replica is also base replica (CASSANDRA-14251)
  * Chain commit log marker potential performance regression in batch commit mode (CASSANDRA-14194)

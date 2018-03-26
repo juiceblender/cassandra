@@ -24,8 +24,6 @@ import java.net.UnknownHostException;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicBoolean;
-import javax.net.ssl.SSLContext;
-import javax.net.ssl.SSLEngine;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -140,7 +138,7 @@ public class Server implements CassandraDaemon.Server
 
         if (this.useSSL)
         {
-            final EncryptionOptions clientEnc = DatabaseDescriptor.getClientEncryptionOptions();
+            final EncryptionOptions clientEnc = DatabaseDescriptor.getNativeProtocolEncryptionOptions();
 
             if (clientEnc.optional)
             {
@@ -189,13 +187,19 @@ public class Server implements CassandraDaemon.Server
             if (connection instanceof ServerConnection)
             {
                 ServerConnection conn = (ServerConnection) connection;
+                SslHandler sslHandler = conn.channel().pipeline().get(SslHandler.class);
+
                 result.add(new ImmutableMap.Builder<String, String>()
                         .put("user", conn.getClientState().getUser().getName())
                         .put("keyspace", conn.getClientState().getRawKeyspace() == null ? "" : conn.getClientState().getRawKeyspace())
                         .put("address", conn.getClientState().getRemoteAddress().toString())
                         .put("version", String.valueOf(conn.getVersion().asInt()))
                         .put("requests", String.valueOf(conn.requests.getCount()))
-                        .put("ssl", conn.channel().pipeline().get(SslHandler.class) == null ? "false" : "true")
+                        .put("ssl", Boolean.toString(sslHandler == null))
+                        .put("cipher", sslHandler != null ? sslHandler.engine().getSession().getCipherSuite() : "undefined")
+                        .put("protocol", sslHandler != null ? sslHandler.engine().getSession().getProtocol() : "undefined")
+                        .put("driverName", conn.getClientState().getDriverName().orElse("undefined"))
+                        .put("driverVersion", conn.getClientState().getDriverVersion().orElse("undefined"))
                         .build());
             }
         }
@@ -401,7 +405,8 @@ public class Server implements CassandraDaemon.Server
 
         protected final SslHandler createSslHandler(ByteBufAllocator allocator) throws IOException
         {
-            SslContext sslContext = SSLFactory.getSslContext(encryptionOptions, encryptionOptions.require_client_auth, true);
+            SslContext sslContext = SSLFactory.getSslContext(encryptionOptions, encryptionOptions.require_client_auth,
+                                                             SSLFactory.ConnectionType.NATIVE_TRANSPORT, SSLFactory.SocketType.SERVER);
             return sslContext.newHandler(allocator);
         }
     }
