@@ -169,7 +169,7 @@ public class CompactionStrategyManager implements INotificationConsumer
 
         //Ideally you would check whether TWCS has that option enabled...but then it is protected in the package so not visible.
         //One other option is to create another function isArchivingEnabled(cfs) which checks whether it's TWCS and whether archiveunits == -1, which is public.
-        if (task == null && DatabaseDescriptor.getAllArchiveDataFileLocations() != null)
+        if (task == null && DatabaseDescriptor.getAllArchiveDataFileLocations().length != 0)
             task = getNextBackgroundTask(gcBefore, Directories.DirectoryType.ARCHIVE);
 
         return task;

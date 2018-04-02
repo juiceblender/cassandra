@@ -109,7 +109,7 @@ public class DiskBoundaryManager
         }
         while (directoriesVersion != BlacklistedDirectories.getDirectoriesVersion()); // if directoriesVersion has changed we need to recalculate
 
-        if (localRanges == null || localRanges.isEmpty())
+        if (localRanges == null || localRanges.isEmpty() || dirs.length == 0)
             return new DiskBoundaries(dirs, null, ringVersion, directoriesVersion);
 
         List<Range<Token>> sortedLocalRanges = Range.sort(localRanges);
