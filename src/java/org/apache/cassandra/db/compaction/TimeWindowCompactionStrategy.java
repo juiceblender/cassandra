@@ -111,6 +111,7 @@ public class TimeWindowCompactionStrategy extends AbstractCompactionStrategy
                 if (!archivingEnabled)
                     return null;
 
+                logger.info("Checking for SSTables eligible for archive.");
                 List<SSTableReader> archivableSSTables = getArchivableSSTables();
                 if (archivableSSTables.isEmpty())
                     return null;
@@ -184,8 +185,8 @@ public class TimeWindowCompactionStrategy extends AbstractCompactionStrategy
         return Collections.singletonList(Collections.min(sstablesWithTombstones, SSTableReader.sizeComparator));
     }
 
-    private static boolean isOldEnoughToArchive(SSTableReader sstable, long now) {
-        return !sstable.isInArchivingDirectory() && sstable.getMaxTimestamp() < now;
+    private static boolean isOldEnoughToArchive(SSTableReader sstable, long now, TimeUnit timestampResolution) {
+        return !sstable.isInArchivingDirectory() && TimeUnit.MILLISECONDS.convert(sstable.getMaxTimestamp(), timestampResolution) < now;
     }
 
     private List<SSTableReader> getArchivableSSTables() {
@@ -197,7 +198,7 @@ public class TimeWindowCompactionStrategy extends AbstractCompactionStrategy
 
         Set<SSTableReader> candidates = Sets.newHashSet(filterSuspectSSTables(uncompacting));
 
-        return ImmutableList.copyOf(filter(candidates, candidate -> isOldEnoughToArchive(candidate, now)));
+        return ImmutableList.copyOf(filter(candidates, candidate -> isOldEnoughToArchive(candidate, now, options.timestampResolution)));
     }
 
     private List<SSTableReader> getCompactionCandidates(Iterable<SSTableReader> candidateSSTables)
@@ -316,13 +317,13 @@ public class TimeWindowCompactionStrategy extends AbstractCompactionStrategy
                 //These are just estimates - we don't know how many SSTables the final compaction would generate
                 //That are eligible for archiving. We do know that all compactions will happen first before
                 //Archiving happens
-                if (archivingEnabled && tasks.get(key).stream().anyMatch(c -> isOldEnoughToArchive(c, now)))
+                if (archivingEnabled && tasks.get(key).stream().anyMatch(c -> isOldEnoughToArchive(c, now, options.timestampResolution)))
                     n++;
             }
             else if (key.compareTo(now) < 0 && tasks.get(key).size() >= 2)
             {
                 n++;
-                if (archivingEnabled && tasks.get(key).stream().anyMatch(c -> isOldEnoughToArchive(c, now)))
+                if (archivingEnabled && tasks.get(key).stream().anyMatch(c -> isOldEnoughToArchive(c, now, options.timestampResolution)))
                     n++;
             }
         }
