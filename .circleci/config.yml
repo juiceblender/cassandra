@@ -24,7 +24,7 @@ resource_constrained_env_vars: &resource_constrained_env_vars
 # Settings for users who do not have a paid CircleCI account
 default_env_settings: &default_env_settings
     resource_class: medium
-    parallelism: 10
+    parallelism: 4
 # Settings for users with high-capacity, paid CircleCI account
 high_capacity_env_settings: &high_capacity_env_settings
     resource_class: xlarge
