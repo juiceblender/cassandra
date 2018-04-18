@@ -22,6 +22,7 @@ import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.stream.Collectors;
 
 import com.google.common.annotations.VisibleForTesting;
 import com.google.common.base.Throwables;
@@ -50,6 +51,7 @@ import org.apache.cassandra.io.sstable.SSTableMultiWriter;
 import org.apache.cassandra.io.sstable.metadata.MetadataCollector;
 import org.apache.cassandra.io.util.FileUtils;
 import org.apache.cassandra.service.ActiveRepairService;
+import org.apache.cassandra.service.StorageService;
 import org.apache.cassandra.utils.ByteBufferUtil;
 import org.apache.cassandra.utils.FBUtilities;
 import org.apache.cassandra.utils.ObjectSizes;
@@ -293,42 +295,102 @@ public class Memtable implements Comparable<Memtable>
         return partitions.size();
     }
 
-    public List<FlushRunnable> flushRunnables(LifecycleTransaction txn)
+    public List<List<FlushRunnable>> flushRunnables(LifecycleTransaction txn)
     {
-        return createFlushRunnables(txn);
+        List<Range<Token>> localRanges = Range.sort(StorageService.instance.getLocalRanges(cfs.keyspace.getName()));
+
+        if (!cfs.getPartitioner().splitter().isPresent() || localRanges.isEmpty())
+            return Collections.singletonList(Collections.singletonList(new FlushRunnable(txn)));
+
+        return createFlushRunnables(localRanges, txn);
     }
 
-    private List<FlushRunnable> createFlushRunnables(LifecycleTransaction txn)
+    private List<List<FlushRunnable>> createFlushRunnables(List<Range<Token>> localRanges, LifecycleTransaction txn)
     {
-        DiskBoundaries diskBoundaries = cfs.getDiskBoundaries();
-        List<PartitionPosition> boundaries = diskBoundaries.positions;
-        List<Directories.DataDirectory> locations = diskBoundaries.directories;
-        if (boundaries == null)
-            return Collections.singletonList(new FlushRunnable(txn));
+        assert cfs.getPartitioner().splitter().isPresent();
+        boolean flushPerRange = cfs.metadata.get().params.compaction.rangeAwareCompaction() && DatabaseDescriptor.getNumTokens() == 1;
+        Directories.DataDirectory[] locations = cfs.getDirectories().getWriteableLocations();
+        List<PartitionPosition> boundaries = StorageService.getDiskBoundaries(localRanges, cfs.getPartitioner(), locations);
 
-        List<FlushRunnable> runnables = new ArrayList<>(boundaries.size());
-        PartitionPosition rangeStart = cfs.getPartitioner().getMinimumToken().minKeyBound();
+        List<List<PartitionPosition>> perDiskBoundaries = flushPerRange
+                                                          ? createFlushRunnablePerRangeHelper(localRanges, boundaries, cfs.getPartitioner().getMinimumToken().minKeyBound())
+                                                          : createFlushRunnablePerDiskHelper(boundaries);
+
+        List<List<FlushRunnable>> runnables = new ArrayList<>(boundaries.size());
         try
         {
+            PartitionPosition boundaryStart = cfs.getPartitioner().getMinimumToken().minKeyBound();
+
             for (int i = 0; i < boundaries.size(); i++)
             {
-                PartitionPosition t = boundaries.get(i);
-                runnables.add(new FlushRunnable(rangeStart, t, locations.get(i), txn));
-                rangeStart = t;
+                List<FlushRunnable> diskRunnables = new ArrayList<>();
+                for (PartitionPosition position : perDiskBoundaries.get(i))
+                {
+                    diskRunnables.add(new FlushRunnable(boundaryStart, position, locations[i], txn));
+                    boundaryStart = position;
+                }
+                runnables.add(diskRunnables);
             }
-            return runnables;
         }
-        catch (Throwable e)
+        catch (Throwable t)
         {
-            throw Throwables.propagate(abortRunnables(runnables, e));
+            throw Throwables.propagate(abortRunnables(runnables, t));
         }
+        return runnables;
     }
 
-    public Throwable abortRunnables(List<FlushRunnable> runnables, Throwable t)
+    /**
+     * Just converts the boundaries from a List<PartitionPosition> to a List<List<PP>> - one flush runnable per data directory
+     * @param boundaries
+     * @return
+     */
+    private static List<List<PartitionPosition>> createFlushRunnablePerDiskHelper(List<PartitionPosition> boundaries)
     {
-        if (runnables != null)
-            for (FlushRunnable runnable : runnables)
-                t = runnable.writer.abort(t);
+        return boundaries.stream().map(Collections::singletonList).collect(Collectors.toList());
+    }
+
+    /**
+     * Creates per-disk boundaries for flush runnables
+     *
+     * When creating runnables, always start at partitioner min token and end at the last bound, this makes sure we don't miss any
+     * data in the memtable when flushing.
+     *
+     * @param localRanges
+     * @param boundaries
+     * @param minKeyBound
+     * @return
+     */
+    @VisibleForTesting
+    static List<List<PartitionPosition>> createFlushRunnablePerRangeHelper(List<Range<Token>> localRanges, List<PartitionPosition> boundaries, PartitionPosition minKeyBound)
+    {
+        List<List<PartitionPosition>> rangeBoundaries = new ArrayList<>(boundaries.size());
+
+        PartitionPosition boundaryStart = minKeyBound;
+        for (int i = 0; i < boundaries.size(); i++)
+        {
+            PartitionPosition t = boundaries.get(i);
+            Range<Token> diskRange = new Range<>(boundaryStart.getToken(), t.getToken());
+            // todo: optimizable - use the fact that both boundaries and localRanges are sorted
+            List<PartitionPosition> intersecting = localRanges.stream()
+                                                              .filter(diskRange::intersects)
+                                                              .map(r -> r.right.minKeyBound())
+                                                              .collect(Collectors.toList());
+            if (intersecting.size() > 0) // the last boundary should always be the disk boundary
+                intersecting.set(intersecting.size() - 1, t);
+            else
+                intersecting.add(t);
+            rangeBoundaries.add(intersecting);
+            boundaryStart = t;
+        }
+        return rangeBoundaries;
+    }
+
+    public Throwable abortRunnables(List<List<FlushRunnable>> allRunnables, Throwable t)
+    {
+        if (allRunnables != null)
+            for (List<FlushRunnable> runnables : allRunnables)
+                for (FlushRunnable runnable : runnables)
+                    t = runnable.writer.abort(t);
         return t;
     }
 

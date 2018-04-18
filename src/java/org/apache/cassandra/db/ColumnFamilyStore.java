@@ -1107,7 +1107,7 @@ public class ColumnFamilyStore implements ColumnFamilyStoreMBean
             List<SSTableReader> sstables = new ArrayList<>();
             try (LifecycleTransaction txn = LifecycleTransaction.offline(OperationType.FLUSH))
             {
-                List<Memtable.FlushRunnable> flushRunnables = null;
+                List<List<Memtable.FlushRunnable>> flushRunnables = null;
                 List<SSTableMultiWriter> flushResults = null;
 
                 try
@@ -1116,7 +1116,8 @@ public class ColumnFamilyStore implements ColumnFamilyStoreMBean
                     flushRunnables = memtable.flushRunnables(txn);
 
                     for (int i = 0; i < flushRunnables.size(); i++)
-                        futures.add(perDiskflushExecutors[i].submit(flushRunnables.get(i)));
+                        for (Memtable.FlushRunnable runnable : flushRunnables.get(i))
+                            futures.add(perDiskflushExecutors[i].submit(runnable));
 
                     /**
                      * we can flush 2is as soon as the barrier completes, as they will be consistent with (or ahead of) the
