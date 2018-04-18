@@ -15,22 +15,28 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package org.apache.cassandra.io.sstable;
 
-import java.io.File;
+package org.apache.cassandra.db;
 
-public class CorruptSSTableException extends RuntimeException
+import org.apache.cassandra.db.partitions.PartitionUpdate;
+import org.apache.cassandra.index.transactions.UpdateTransaction;
+import org.apache.cassandra.tracing.Tracing;
+
+public class CassandraTableWriteHandler implements TableWriteHandler
 {
-    public final File path;
+    private final ColumnFamilyStore cfs;
 
-    public CorruptSSTableException(Throwable cause, File path)
+    public CassandraTableWriteHandler(ColumnFamilyStore cfs)
     {
-        super("Corrupted: " + path, cause);
-        this.path = path;
+        this.cfs = cfs;
     }
 
-    public CorruptSSTableException(Throwable cause, String path)
+    @Override
+    @SuppressWarnings("resource")
+    public void write(PartitionUpdate update, WriteContext context, UpdateTransaction updateTransaction)
     {
-        this(cause, new File(path));
+        CassandraWriteContext ctx = CassandraWriteContext.fromContext(context);
+        Tracing.trace("Adding to {} memtable", update.metadata().name);
+        cfs.apply(update, updateTransaction, ctx.getGroup(), ctx.getPosition());
     }
 }

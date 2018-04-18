@@ -216,6 +216,7 @@ public class ColumnFamilyStore implements ColumnFamilyStoreMBean
     public final TableMetrics metric;
     public volatile long sampleLatencyNanos;
 
+    private final CassandraTableWriteHandler writeHandler;
     private final CassandraStreamManager streamManager;
 
     private final TableRepairManager repairManager;
@@ -450,6 +451,7 @@ public class ColumnFamilyStore implements ColumnFamilyStoreMBean
             mbeanName = null;
             oldMBeanName= null;
         }
+        writeHandler = new CassandraTableWriteHandler(this);
         streamManager = new CassandraStreamManager(this);
         repairManager = new CassandraTableRepairManager(this);
     }
@@ -464,6 +466,11 @@ public class ColumnFamilyStore implements ColumnFamilyStoreMBean
         {
             logger.error("Exception caught while calculating speculative retry threshold for {}: {}", metadata(), e);
         }
+    }
+
+    public TableWriteHandler getWriteHandler()
+    {
+        return writeHandler;
     }
 
     public TableStreamManager getStreamManager()
@@ -680,7 +687,7 @@ public class ColumnFamilyStore implements ColumnFamilyStoreMBean
      * @param ksName The keyspace name
      * @param cfName The columnFamily name
      */
-    public static synchronized void loadNewSSTables(String ksName, String cfName)
+    public static void loadNewSSTables(String ksName, String cfName)
     {
         /** ks/cf existence checks will be done by open and getCFS methods for us */
         Keyspace keyspace = Keyspace.open(ksName);
@@ -1452,9 +1459,9 @@ public class ColumnFamilyStore implements ColumnFamilyStoreMBean
         Collection<Range<Token>> ranges = StorageService.instance.getLocalRanges(keyspace.getName());
         for (SSTableReader sstable : sstables)
         {
-            List<Pair<Long, Long>> positions = sstable.getPositionsForRanges(ranges);
-            for (Pair<Long, Long> position : positions)
-                expectedFileSize += position.right - position.left;
+            List<SSTableReader.PartitionPositionBounds> positions = sstable.getPositionsForRanges(ranges);
+            for (SSTableReader.PartitionPositionBounds position : positions)
+                expectedFileSize += position.upperPosition - position.lowerPosition;
         }
 
         double compressionRatio = metric.compressionRatio.getValue();
@@ -1825,7 +1832,7 @@ public class ColumnFamilyStore implements ColumnFamilyStoreMBean
 
             try (PrintStream out = new PrintStream(schemaFile))
             {
-                for (String s: ColumnFamilyStoreCQLHelper.dumpReCreateStatements(metadata()))
+                for (String s: TableCQLHelper.dumpReCreateStatements(metadata()))
                     out.println(s);
             }
         }
@@ -1966,7 +1973,7 @@ public class ColumnFamilyStore implements ColumnFamilyStoreMBean
      * @return  Return a map of all snapshots to space being used
      * The pair for a snapshot has true size and size on disk.
      */
-    public Map<String, Pair<Long,Long>> getSnapshotDetails()
+    public Map<String, Directories.SnapshotSizeDetails> getSnapshotDetails()
     {
         return getDirectories().getSnapshotDetails();
     }

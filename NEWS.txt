@@ -69,6 +69,7 @@ New features
    - SSTableDump now supports the -l option to output each partition as it's own json object
      See CASSANDRA-13848 for more detail
    - Metric for coordinator writes per table has been added. See CASSANDRA-14232
+   - Nodetool cfstats now has options to sort by various metrics as well as limit results.
 
 Upgrading
 ---------
@@ -140,6 +141,10 @@ Upgrading
       storage port or native port at nodes you must first upgrade the entire cluster
       and clients to 4.0 so they can handle the port not being consistent across
       the cluster.
+    - Names of AWS regions/availability zones have been cleaned up to more correctly
+      match the Amazon names. There is now a new option in conf/cassandra-rackdc.properties
+      that lets users enable the correct names for new clusters, or use the legacy
+      names for existing clusters. See conf/cassandra-rackdc.properties for details.
 
 Materialized Views
 -------------------

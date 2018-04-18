@@ -79,6 +79,7 @@ import org.apache.cassandra.repair.messages.RepairOption;
 import org.apache.cassandra.schema.CompactionParams.TombstoneOption;
 import org.apache.cassandra.schema.KeyspaceMetadata;
 import org.apache.cassandra.schema.MigrationManager;
+import org.apache.cassandra.schema.ReplicationParams;
 import org.apache.cassandra.schema.Schema;
 import org.apache.cassandra.schema.SchemaConstants;
 import org.apache.cassandra.schema.SchemaPullVerbHandler;
@@ -481,6 +482,8 @@ public class StorageService extends NotificationBroadcasterSupport implements IE
         if (epStates.get(replaceAddress) == null)
             throw new RuntimeException(String.format("Cannot replace_address %s because it doesn't exist in gossip", replaceAddress));
 
+        validateEndpointSnitch(epStates.values().iterator());
+
         try
         {
             VersionedValue tokensVersionedValue = epStates.get(replaceAddress).getApplicationState(ApplicationState.TOKENS);
@@ -505,7 +508,7 @@ public class StorageService extends NotificationBroadcasterSupport implements IE
         return localHostId;
     }
 
-    private synchronized void checkForEndpointCollision(UUID localHostId) throws ConfigurationException
+    private synchronized void checkForEndpointCollision(UUID localHostId, Set<InetAddressAndPort> peers) throws ConfigurationException
     {
         if (Boolean.getBoolean("cassandra.allow_unsafe_join"))
         {
@@ -514,7 +517,11 @@ public class StorageService extends NotificationBroadcasterSupport implements IE
         }
 
         logger.debug("Starting shadow gossip round to check for endpoint collision");
-        Map<InetAddressAndPort, EndpointState> epStates = Gossiper.instance.doShadowRound();
+        Map<InetAddressAndPort, EndpointState> epStates = Gossiper.instance.doShadowRound(peers);
+
+        if (epStates.isEmpty() && DatabaseDescriptor.getSeeds().contains(FBUtilities.getBroadcastAddressAndPort()))
+            logger.info("Unable to gossip with any peers but continuing anyway since node is in its own seed list");
+
         // If bootstrapping, check whether any previously known status for the endpoint makes it unsafe to do so.
         // If not bootstrapping, compare the host id for this endpoint learned from gossip (if any) with the local
         // one, which was either read from system.local or generated at startup. If a learned id is present &
@@ -525,6 +532,8 @@ public class StorageService extends NotificationBroadcasterSupport implements IE
                                                      "Use cassandra.replace_address if you want to replace this node.",
                                                      FBUtilities.getBroadcastAddressAndPort()));
         }
+
+        validateEndpointSnitch(epStates.values().iterator());
 
         if (shouldBootstrap() && useStrictConsistency && !allowSimultaneousMoves())
         {
@@ -546,6 +555,28 @@ public class StorageService extends NotificationBroadcasterSupport implements IE
                 if (state.equals(VersionedValue.STATUS_BOOTSTRAPPING) || state.equals(VersionedValue.STATUS_LEAVING) || state.equals(VersionedValue.STATUS_MOVING))
                     throw new UnsupportedOperationException("Other bootstrapping/leaving/moving nodes detected, cannot bootstrap while cassandra.consistent.rangemovement is true");
             }
+        }
+    }
+
+    private static void validateEndpointSnitch(Iterator<EndpointState> endpointStates)
+    {
+        Set<String> datacenters = new HashSet<>();
+        Set<String> racks = new HashSet<>();
+        while (endpointStates.hasNext())
+        {
+            EndpointState state = endpointStates.next();
+            VersionedValue val = state.getApplicationState(ApplicationState.DC);
+            if (val != null)
+                datacenters.add(val.value);
+            val = state.getApplicationState(ApplicationState.RACK);
+            if (val != null)
+                racks.add(val.value);
+        }
+
+        IEndpointSnitch snitch = DatabaseDescriptor.getEndpointSnitch();
+        if (!snitch.validate(datacenters, racks))
+        {
+            throw new IllegalStateException();
         }
     }
 
@@ -775,7 +806,7 @@ public class StorageService extends NotificationBroadcasterSupport implements IE
             }
             else
             {
-                checkForEndpointCollision(localHostId);
+                checkForEndpointCollision(localHostId, SystemKeyspace.loadHostIds().keySet());
             }
 
             // have to start the gossip service before we can see any info on other nodes.  this is necessary
@@ -2968,6 +2999,16 @@ public class StorageService extends NotificationBroadcasterSupport implements IE
         return Schema.instance.getVersion().toString();
     }
 
+    public String getKeyspaceReplicationInfo(String keyspaceName)
+    {
+        Keyspace keyspaceInstance = Schema.instance.getKeyspaceInstance(keyspaceName);
+        if (keyspaceInstance == null)
+            throw new IllegalArgumentException(); // ideally should never happen
+        ReplicationParams replicationParams = keyspaceInstance.getMetadata().params.replication;
+        String replicationInfo = replicationParams.klass.getSimpleName() + " " + replicationParams.options.toString();
+        return replicationInfo;
+    }
+
     @Deprecated
     public List<String> getLeavingNodes()
     {
@@ -3448,7 +3489,7 @@ public class StorageService extends NotificationBroadcasterSupport implements IE
 
             for (ColumnFamilyStore cfStore : keyspace.getColumnFamilyStores())
             {
-                for (Map.Entry<String, Pair<Long,Long>> snapshotDetail : cfStore.getSnapshotDetails().entrySet())
+                for (Map.Entry<String, Directories.SnapshotSizeDetails> snapshotDetail : cfStore.getSnapshotDetails().entrySet())
                 {
                     TabularDataSupport data = (TabularDataSupport)snapshotMap.get(snapshotDetail.getKey());
                     if (data == null)
@@ -5196,6 +5237,8 @@ public class StorageService extends NotificationBroadcasterSupport implements IE
      */
     public void loadNewSSTables(String ksName, String cfName)
     {
+        if (!isInitialized())
+            throw new RuntimeException("Not yet initialized, can't load new sstables");
         ColumnFamilyStore.loadNewSSTables(ksName, cfName);
     }
 

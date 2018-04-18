@@ -15,27 +15,17 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package org.apache.cassandra.gms;
 
-import java.net.UnknownHostException;
-import java.util.List;
-import java.util.Map;
+package org.apache.cassandra.db;
 
-public interface GossiperMBean
+/**
+ * Issued by the keyspace write handler and used in the write path (as expected), as well as the read path
+ * and some async index building code. In the read and index paths, the write context is intended to be used
+ * as a marker for ordering operations. Reads can also end up performing writes in some cases, particularly
+ * when correcting secondary indexes.
+ */
+public interface WriteContext extends AutoCloseable
 {
-    public long getEndpointDowntime(String address) throws UnknownHostException;
-
-    public int getCurrentGenerationNumber(String address) throws UnknownHostException;
-
-    public void unsafeAssassinateEndpoint(String address) throws UnknownHostException;
-
-    public void assassinateEndpoint(String address) throws UnknownHostException;
-
-    public List<String> reloadSeeds();
-
-    public List<String> getSeeds();
-
-    /** Returns each node's database release version */
-    public Map<String, List<String>> getReleaseVersionsWithPort();
-
+    @Override
+    void close();
 }
