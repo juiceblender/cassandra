@@ -2663,4 +2663,10 @@ public class ColumnFamilyStore implements ColumnFamilyStoreMBean
     {
         return neverPurgeTombstones;
     }
+
+    @Override
+    public List<Map<String, Object>> getCompactionStrategyInfo()
+    {
+        return compactionStrategyManager.describeCompaction();
+    }
 }

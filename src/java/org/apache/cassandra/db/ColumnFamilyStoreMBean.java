@@ -199,4 +199,6 @@ public interface ColumnFamilyStoreMBean
     public void setNeverPurgeTombstones(boolean value);
 
     public boolean getNeverPurgeTombstones();
+
+    public List<Map<String, Object>> getCompactionStrategyInfo();
 }

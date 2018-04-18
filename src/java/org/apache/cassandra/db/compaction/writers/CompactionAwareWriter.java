@@ -81,6 +81,16 @@ public abstract class CompactionAwareWriter extends Transactional.AbstractTransa
                                  Set<SSTableReader> nonExpiredSSTables,
                                  boolean keepOriginals)
     {
+        this(cfs, directories, true, txn, nonExpiredSSTables, keepOriginals);
+    }
+
+    public CompactionAwareWriter(ColumnFamilyStore cfs,
+                                 Directories directories,
+                                 boolean shouldOpenEarly,
+                                 LifecycleTransaction txn,
+                                 Set<SSTableReader> nonExpiredSSTables,
+                                 boolean keepOriginals)
+    {
         this.cfs = cfs;
         this.directories = directories;
         this.nonExpiredSSTables = nonExpiredSSTables;
@@ -88,7 +98,10 @@ public abstract class CompactionAwareWriter extends Transactional.AbstractTransa
 
         estimatedTotalKeys = SSTableReader.getApproximateKeyCount(nonExpiredSSTables);
         maxAge = CompactionTask.getMaxDataAge(nonExpiredSSTables);
-        sstableWriter = SSTableRewriter.construct(cfs, txn, keepOriginals, maxAge);
+        if (shouldOpenEarly)
+            sstableWriter = SSTableRewriter.construct(cfs, txn, keepOriginals, maxAge);
+        else
+            sstableWriter = SSTableRewriter.constructWithoutEarlyOpening(txn, keepOriginals, maxAge);
         minRepairedAt = CompactionTask.getMinRepairedAt(nonExpiredSSTables);
         pendingRepair = CompactionTask.getPendingRepair(nonExpiredSSTables);
         DiskBoundaries db = cfs.getDiskBoundaries();
