@@ -141,9 +141,9 @@ public class RangeAwareCompactionWriter extends CompactionAwareWriter
         long sum = 0;
         for (SSTableReader sstable : sstables)
         {
-            List<Pair<Long, Long>> positions = sstable.getPositionsForRanges(Collections.singletonList(tokenRange));
-            for (Pair<Long, Long> pos : positions)
-                sum += pos.right - pos.left;
+            List<SSTableReader.PartitionPositionBounds> positions = sstable.getPositionsForRanges(Collections.singletonList(tokenRange));
+            for (SSTableReader.PartitionPositionBounds pos : positions)
+                sum += pos.upperPosition - pos.lowerPosition;
         }
         double compressionRatio = cfs.metric.compressionRatio.getValue();
         double uncompressedSize = compactionGain * sum;
