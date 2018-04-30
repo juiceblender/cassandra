@@ -26,6 +26,11 @@ import java.util.SortedMap;
 import java.util.TreeMap;
 import java.util.concurrent.TimeUnit;
 
+import com.fasterxml.jackson.core.JsonFactory;
+import com.fasterxml.jackson.core.JsonParser;
+import com.fasterxml.jackson.core.JsonToken;
+import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.MappingJsonFactory;
 import org.apache.cassandra.io.sstable.Descriptor;
 import org.apache.cassandra.io.sstable.format.SSTableWriter;
 import org.apache.commons.cli.CommandLine;
@@ -48,11 +53,6 @@ import org.apache.cassandra.serializers.MarshalException;
 import org.apache.cassandra.service.ActiveRepairService;
 import org.apache.cassandra.utils.ByteBufferUtil;
 import org.apache.cassandra.utils.JVMStabilityInspector;
-import org.codehaus.jackson.JsonFactory;
-import org.codehaus.jackson.JsonParser;
-import org.codehaus.jackson.JsonToken;
-import org.codehaus.jackson.map.MappingJsonFactory;
-import org.codehaus.jackson.type.TypeReference;
 
 /**
  * Create SSTables from JSON input
@@ -70,8 +70,7 @@ public class SSTableImport
     private Integer keyCountToImport;
     private final boolean isSorted;
 
-    private static final JsonFactory factory = new MappingJsonFactory().configure(
-                                                                                 JsonParser.Feature.INTERN_FIELD_NAMES, false);
+    private static final JsonFactory factory = new MappingJsonFactory().configure(JsonFactory.Feature.INTERN_FIELD_NAMES, false);
 
     static
     {
