@@ -40,6 +40,9 @@ import javax.annotation.Nullable;
 
 import com.google.common.base.Joiner;
 import com.google.common.collect.AbstractIterator;
+
+import com.fasterxml.jackson.core.JsonFactory;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import org.apache.cassandra.io.util.FileUtils;
 import org.apache.commons.lang3.StringUtils;
 import org.slf4j.Logger;
@@ -57,9 +60,6 @@ import org.apache.cassandra.io.IVersionedSerializer;
 import org.apache.cassandra.io.util.DataOutputBuffer;
 import org.apache.cassandra.io.util.IAllocator;
 import org.apache.cassandra.net.AsyncOneResponse;
-
-import org.codehaus.jackson.JsonFactory;
-import org.codehaus.jackson.map.ObjectMapper;
 
 public class FBUtilities
 {

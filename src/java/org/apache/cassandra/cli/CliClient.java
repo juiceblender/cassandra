@@ -34,6 +34,11 @@ import com.google.common.collect.Iterables;
 
 import org.apache.commons.lang3.StringUtils;
 
+import com.fasterxml.jackson.core.JsonEncoding;
+import com.fasterxml.jackson.core.JsonFactory;
+import com.fasterxml.jackson.core.JsonGenerator;
+import com.fasterxml.jackson.core.JsonParser;
+import com.fasterxml.jackson.core.JsonToken;
 import org.antlr.runtime.tree.Tree;
 import org.apache.cassandra.auth.IAuthenticator;
 import org.apache.cassandra.exceptions.RequestValidationException;
@@ -53,7 +58,6 @@ import org.apache.cassandra.utils.JVMStabilityInspector;
 import org.apache.cassandra.utils.UUIDGen;
 import org.apache.thrift.TBaseHelper;
 import org.apache.thrift.TException;
-import org.codehaus.jackson.*;
 import org.yaml.snakeyaml.Yaml;
 import org.yaml.snakeyaml.constructor.Constructor;
 
@@ -3135,7 +3139,7 @@ public class CliClient
                 try
                 {
                     JsonFactory f = new JsonFactory();
-                    JsonParser p = f.createJsonParser(assumptionFile);
+                    JsonParser p = f.createParser(assumptionFile);
                     JsonToken token = p.nextToken();
                     while (token != JsonToken.END_OBJECT)
                     {
@@ -3197,7 +3201,7 @@ public class CliClient
                 try
                 {
                     JsonFactory f = new JsonFactory();
-                    JsonGenerator g = f.createJsonGenerator(assumptionFile, JsonEncoding.UTF8);
+                    JsonGenerator g = f.createGenerator(assumptionFile, JsonEncoding.UTF8);
                     g.useDefaultPrettyPrinter();
                     g.writeStartObject();
                     for (Map.Entry<String, Map<String, Map<String, String>>> ksEntry : assumptions.entrySet())

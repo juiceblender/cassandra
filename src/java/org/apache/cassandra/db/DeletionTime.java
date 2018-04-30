@@ -23,12 +23,12 @@ import java.io.IOException;
 import com.google.common.annotations.VisibleForTesting;
 import com.google.common.base.Objects;
 
+import com.fasterxml.jackson.annotation.JsonIgnore;
 import org.apache.cassandra.cache.IMeasurableMemory;
 import org.apache.cassandra.io.ISerializer;
 import org.apache.cassandra.io.util.DataOutputPlus;
 import org.apache.cassandra.io.util.FileUtils;
 import org.apache.cassandra.utils.ObjectSizes;
-import org.codehaus.jackson.annotate.JsonIgnore;
 
 /**
  * A top-level (row) tombstone.
