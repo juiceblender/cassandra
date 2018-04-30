@@ -21,14 +21,14 @@ import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.util.*;
 
+import com.fasterxml.jackson.core.util.BufferRecyclers;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import org.apache.cassandra.config.CFMetaData;
 import org.apache.cassandra.config.ColumnDefinition;
 import org.apache.cassandra.cql3.functions.Function;
 import org.apache.cassandra.db.marshal.UTF8Type;
 import org.apache.cassandra.exceptions.InvalidRequestException;
 import org.apache.cassandra.serializers.MarshalException;
-import org.codehaus.jackson.io.JsonStringEncoder;
-import org.codehaus.jackson.map.ObjectMapper;
 
 /** Term-related classes for INSERT JSON support. */
 public class Json
@@ -42,7 +42,7 @@ public class Json
      */
     public static String quoteAsJsonString(String s)
     {
-        return new String(JsonStringEncoder.getInstance().quoteAsString(s));
+        return new String(BufferRecyclers.getJsonStringEncoder().quoteAsString(s));
     }
 
     public static Object decodeJson(String json)
