@@ -1,0 +1,15 @@
+[Unit]
+Description=Apache Cassandra
+
+[Service]
+User=cassandra
+SyslogIdentifier=cassandra
+Restart=on-failure
+RestartSec=2min
+StartLimitInterval=1hour
+StartLimitBurst=10
+SuccessExitStatus=143
+ExecStart=/usr/sbin/cassandra -f
+
+[Install]
+WantedBy=multi-user.target

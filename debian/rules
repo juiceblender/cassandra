@@ -1,7 +1,7 @@
 #!/usr/bin/make -f
 
 # Uncomment to enable verbose mode.
-#export DH_VERBOSE=1
+export DH_VERBOSE=1
 
 include /usr/share/dpatch/dpatch.make
 
@@ -54,6 +54,11 @@ install: build
 		usr/share/cassandra/apache-cassandra.jar
 
 	cd debian/cassandra/etc/sysctl.d && mv cassandra-sysctl.conf cassandra.conf
+	cd debian/cassandra/lib/systemd/system/cassandra.service.d && mv cassandra.service.conf cassandra.conf
+
+	dh_systemd_enable
+	dh_installinit
+	dh_systemd_start
 
 # Build architecture-independent files here.
 binary-indep: build install

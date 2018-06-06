@@ -10,6 +10,7 @@ conf/hotspot_compiler etc/cassandra
 conf/triggers/* etc/cassandra/triggers
 debian/cassandra.in.sh usr/share/cassandra
 debian/cassandra.conf etc/security/limits.d
+debian/cassandra.service.conf lib/systemd/system/cassandra.service.d
 debian/cassandra-sysctl.conf etc/sysctl.d
 bin/cassandra usr/sbin
 bin/nodetool usr/bin
@@ -25,3 +26,4 @@ lib/*.jar usr/share/cassandra/lib
 lib/*.zip usr/share/cassandra/lib
 lib/sigar-bin/* usr/share/cassandra/lib/sigar-bin
 lib/licenses usr/share/doc/cassandra
+
