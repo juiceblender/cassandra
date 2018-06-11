@@ -273,7 +273,7 @@ public class CompressedInputStream extends RebufferingInputStream implements Aut
         protected void runMayThrow() throws Exception
         {
             byte[] tmp = null;
-            boolean isReadableByteChannel = source.getClass() == ReadableByteChannel.class;
+            boolean isReadableByteChannel = source instanceof ReadableByteChannel;
             while (chunks.hasNext())
             {
                 if (!running)
