@@ -103,12 +103,10 @@ public class CompressedInputStream extends RebufferingInputStream implements Aut
      */
     private int currentBufferOffset;
 
-    /**
-     * @param source Input source to read compressed data from
-     * @param info Compression info
-     */
     public CompressedInputStream(DataInputPlus source, CompressionInfo info, ChecksumType checksumType, DoubleSupplier crcCheckChanceSupplier)
     {
+        // pre-allocate the reusuable buffer to be used in the 'buffer' field.
+        // needs to be direct as we use snappy for compression, and it requires a direct buffer.
         super(ByteBuffer.allocateDirect(info.parameters.chunkLength()));
         buffer.limit(buffer.position()); // force the buffer to appear "consumed" so that it triggers reBuffer on the first read
         this.info = info;
@@ -133,7 +131,10 @@ public class CompressedInputStream extends RebufferingInputStream implements Aut
         current = position;
 
         if (current > streamOffset + buffer.limit())
+        {
+            // pass 'false' as an argument to reBuffer() because we've just set the 'current' field a few lines up
             reBuffer(false);
+        }
 
         currentBufferOffset = Ints.checkedCast(current - streamOffset);
         buffer.position(currentBufferOffset);
@@ -155,7 +156,11 @@ public class CompressedInputStream extends RebufferingInputStream implements Aut
 
         // increment the offset into the stream based on the current buffer's read count
         if (updateCurrent)
+        {
+            // NOTE: we must subtract the currentBufferOffset because if this method is called after a call to
+            // position() which has an offset that is not zero, we would double-count that offset here.
             current += buffer.position() - currentBufferOffset;
+        }
 
         try
         {
