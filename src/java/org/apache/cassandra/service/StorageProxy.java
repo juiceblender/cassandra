@@ -40,6 +40,7 @@ import org.apache.commons.lang3.StringUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import org.apache.cassandra.audit.AuditLogManager;
 import org.apache.cassandra.batchlog.Batch;
 import org.apache.cassandra.batchlog.BatchlogManager;
 import org.apache.cassandra.concurrent.Stage;
@@ -55,7 +56,6 @@ import org.apache.cassandra.schema.SchemaConstants;
 import org.apache.cassandra.db.*;
 import org.apache.cassandra.db.filter.DataLimits;
 import org.apache.cassandra.db.filter.TombstoneOverwhelmingException;
-import org.apache.cassandra.db.fullquerylog.FullQueryLogger;
 import org.apache.cassandra.db.partitions.*;
 import org.apache.cassandra.db.rows.RowIterator;
 import org.apache.cassandra.db.view.ViewUtils;
@@ -78,7 +78,6 @@ import org.apache.cassandra.service.paxos.ProposeCallback;
 import org.apache.cassandra.service.paxos.ProposeVerbHandler;
 import org.apache.cassandra.net.MessagingService.Verb;
 import org.apache.cassandra.tracing.Tracing;
-import org.apache.cassandra.transport.Server;
 import org.apache.cassandra.triggers.TriggerExecutor;
 import org.apache.cassandra.utils.*;
 import org.apache.cassandra.utils.AbstractIterator;
@@ -260,7 +259,7 @@ public class StorageProxy implements StorageProxyMBean
 
                 // read the current values and check they validate the conditions
                 Tracing.trace("Reading existing values for CAS precondition");
-                SinglePartitionReadCommand readCommand = request.readCommand(FBUtilities.nowInSeconds());
+                SinglePartitionReadCommand readCommand = (SinglePartitionReadCommand) request.readCommand(FBUtilities.nowInSeconds());
                 ConsistencyLevel readConsistency = consistencyForPaxos == ConsistencyLevel.LOCAL_SERIAL ? ConsistencyLevel.LOCAL_QUORUM : ConsistencyLevel.QUORUM;
 
                 FilteredPartition current;
@@ -1634,7 +1633,7 @@ public class StorageProxy implements StorageProxyMBean
     public static PartitionIterator read(SinglePartitionReadCommand.Group group, ConsistencyLevel consistencyLevel, ClientState state, long queryStartNanoTime)
     throws UnavailableException, IsBootstrappingException, ReadFailureException, ReadTimeoutException, InvalidRequestException
     {
-        if (StorageService.instance.isBootstrapMode() && !systemKeyspaceQuery(group.commands))
+        if (StorageService.instance.isBootstrapMode() && !systemKeyspaceQuery(group.queries))
         {
             readMetrics.unavailables.mark();
             readMetricsMap.get(consistencyLevel).unavailables.mark();
@@ -1650,11 +1649,11 @@ public class StorageProxy implements StorageProxyMBean
     throws InvalidRequestException, UnavailableException, ReadFailureException, ReadTimeoutException
     {
         assert state != null;
-        if (group.commands.size() > 1)
+        if (group.queries.size() > 1)
             throw new InvalidRequestException("SERIAL/LOCAL_SERIAL consistency may only be requested for one partition at a time");
 
         long start = System.nanoTime();
-        SinglePartitionReadCommand command = group.commands.get(0);
+        SinglePartitionReadCommand command = group.queries.get(0);
         TableMetadata metadata = command.metadata();
         DecoratedKey key = command.partitionKey();
 
@@ -1686,7 +1685,7 @@ public class StorageProxy implements StorageProxyMBean
                 throw new ReadFailureException(consistencyLevel, e.received, e.blockFor, false, e.failureReasonByEndpoint);
             }
 
-            result = fetchRows(group.commands, consistencyForCommitOrFetch, queryStartNanoTime);
+            result = fetchRows(group.queries, consistencyForCommitOrFetch, queryStartNanoTime);
         }
         catch (UnavailableException e)
         {
@@ -1728,13 +1727,13 @@ public class StorageProxy implements StorageProxyMBean
         long start = System.nanoTime();
         try
         {
-            PartitionIterator result = fetchRows(group.commands, consistencyLevel, queryStartNanoTime);
+            PartitionIterator result = fetchRows(group.queries, consistencyLevel, queryStartNanoTime);
             // Note that the only difference between the command in a group must be the partition key on which
             // they applied.
-            boolean enforceStrictLiveness = group.commands.get(0).metadata().enforceStrictLiveness();
+            boolean enforceStrictLiveness = group.queries.get(0).metadata().enforceStrictLiveness();
             // If we have more than one command, then despite each read command honoring the limit, the total result
             // might not honor it and so we should enforce it
-            if (group.commands.size() > 1)
+            if (group.queries.size() > 1)
                 result = group.limits().filter(result, group.nowInSec(), group.selectsFullPartition(), enforceStrictLiveness);
             return result;
         }
@@ -1762,7 +1761,7 @@ public class StorageProxy implements StorageProxyMBean
             readMetrics.addNano(latency);
             readMetricsMap.get(consistencyLevel).addNano(latency);
             // TODO avoid giving every command the same latency number.  Can fix this in CASSADRA-5329
-            for (ReadCommand command : group.commands)
+            for (ReadCommand command : group.queries)
                 Keyspace.openAndGetStore(command.metadata()).metric.coordinatorReadLatency.update(latency, TimeUnit.NANOSECONDS);
         }
     }
@@ -2807,19 +2806,19 @@ public class StorageProxy implements StorageProxyMBean
     {
         path = path != null ? path : DatabaseDescriptor.getFullQueryLogPath();
         Preconditions.checkNotNull(path, "cassandra.yaml did not set full_query_log_dir and not set as parameter");
-        FullQueryLogger.instance.configure(Paths.get(path), rollCycle, blocking, maxQueueWeight, maxLogSize);
+        AuditLogManager.getInstance().configureFQL(Paths.get(path), rollCycle, blocking, maxQueueWeight, maxLogSize);
     }
 
     @Override
     public void resetFullQueryLogger()
     {
-        FullQueryLogger.instance.reset(DatabaseDescriptor.getFullQueryLogPath());
+        AuditLogManager.getInstance().resetFQL(DatabaseDescriptor.getFullQueryLogPath());
     }
 
     @Override
     public void stopFullQueryLogger()
     {
-        FullQueryLogger.instance.stop();
+        AuditLogManager.getInstance().disableFQL();
     }
 
     public int getOtcBacklogExpirationInterval() {

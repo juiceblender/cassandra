@@ -17,7 +17,9 @@
  */
 package org.apache.cassandra.cql3.statements;
 
+import org.apache.cassandra.audit.AuditLogEntryType;
 import org.apache.cassandra.auth.Permission;
+import org.apache.cassandra.db.virtual.VirtualKeyspaceRegistry;
 import org.apache.cassandra.exceptions.ConfigurationException;
 import org.apache.cassandra.exceptions.InvalidRequestException;
 import org.apache.cassandra.exceptions.RequestValidationException;
@@ -60,6 +62,9 @@ public class DropKeyspaceStatement extends SchemaAlteringStatement
 
     public Event.SchemaChange announceMigration(QueryState queryState, boolean isLocalOnly) throws ConfigurationException
     {
+        if (null != VirtualKeyspaceRegistry.instance.getKeyspaceNullable(keyspace))
+            throw new InvalidRequestException("Cannot drop virtual keyspaces");
+
         try
         {
             MigrationManager.announceKeyspaceDrop(keyspace, isLocalOnly);
@@ -77,5 +82,11 @@ public class DropKeyspaceStatement extends SchemaAlteringStatement
     public String toString()
     {
         return ToStringBuilder.reflectionToString(this, ToStringStyle.SHORT_PREFIX_STYLE);
+    }
+
+    @Override
+    public AuditLogContext getAuditLogContext()
+    {
+        return new AuditLogContext(AuditLogEntryType.DROP_KEYSPACE, keyspace());
     }
 }

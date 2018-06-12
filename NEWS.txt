@@ -38,6 +38,11 @@ using the provided 'sstableupgrade' tool.
 
 New features
 ------------
+   - There is now an option to automatically upgrade sstables after Cassandra upgrade, enable
+     either in `cassandra.yaml:automatic_sstable_upgrade` or via JMX during runtime. See
+     CASSANDRA-14197.
+   - `nodetool refresh` has been deprecated in favour of `nodetool import` - see CASSANDRA-6719
+     for details
    - An experimental option to compare all merkle trees together has been added - for example, in
      a 3 node cluster with 2 replicas identical and 1 out-of-date, with this option enabled, the
      out-of-date replica will only stream a single copy from up-to-date replica. Enable it by adding
@@ -70,6 +75,12 @@ New features
      See CASSANDRA-13848 for more detail
    - Metric for coordinator writes per table has been added. See CASSANDRA-14232
    - Nodetool cfstats now has options to sort by various metrics as well as limit results.
+   - Operators can restrict login user activity to one or more datacenters. See `network_authorizer`
+     in cassandra.yaml, and the docs for create and alter role statements. CASSANDRA-13985
+   - Roles altered from login=true to login=false will prevent existing connections from executing any
+     statements after the cache has been refreshed. CASSANDRA-13985
+   - Support for audit logging of database activity. If enabled, logs every incoming
+     CQL command request, Authentication (successful as well as unsuccessful login) to a node.
 
 Upgrading
 ---------
@@ -145,6 +156,9 @@ Upgrading
       match the Amazon names. There is now a new option in conf/cassandra-rackdc.properties
       that lets users enable the correct names for new clusters, or use the legacy
       names for existing clusters. See conf/cassandra-rackdc.properties for details.
+    - Background repair has been removed. dclocal_read_repair_chance and
+      read_repair_chance table options have been removed and are now rejected.
+      See CASSANDRA-13910 for details.
 
 Materialized Views
 -------------------

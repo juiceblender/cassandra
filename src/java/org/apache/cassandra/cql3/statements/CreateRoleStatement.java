@@ -17,6 +17,7 @@
  */
 package org.apache.cassandra.cql3.statements;
 
+import org.apache.cassandra.audit.AuditLogEntryType;
 import org.apache.cassandra.auth.*;
 import org.apache.cassandra.config.DatabaseDescriptor;
 import org.apache.cassandra.cql3.RoleName;
@@ -30,12 +31,14 @@ public class CreateRoleStatement extends AuthenticationStatement
 {
     private final RoleResource role;
     private final RoleOptions opts;
+    final DCPermissions dcPermissions;
     private final boolean ifNotExists;
 
-    public CreateRoleStatement(RoleName name, RoleOptions options, boolean ifNotExists)
+    public CreateRoleStatement(RoleName name, RoleOptions options, DCPermissions dcPermissions, boolean ifNotExists)
     {
         this.role = RoleResource.role(name.getName());
         this.opts = options;
+        this.dcPermissions = dcPermissions;
         this.ifNotExists = ifNotExists;
     }
 
@@ -52,6 +55,11 @@ public class CreateRoleStatement extends AuthenticationStatement
     public void validate(ClientState state) throws RequestValidationException
     {
         opts.validate();
+
+        if (dcPermissions != null)
+        {
+            dcPermissions.validate();
+        }
 
         if (role.getRoleName().isEmpty())
             throw new InvalidRequestException("Role name can't be an empty string");
@@ -70,6 +78,10 @@ public class CreateRoleStatement extends AuthenticationStatement
             return null;
 
         DatabaseDescriptor.getRoleManager().createRole(state.getUser(), role, opts);
+        if (DatabaseDescriptor.getNetworkAuthorizer().requireAuthorization())
+        {
+            DatabaseDescriptor.getNetworkAuthorizer().setRoleDatacenters(role, dcPermissions);
+        }
         grantPermissionsToCreator(state);
         return null;
     }
@@ -106,5 +118,10 @@ public class CreateRoleStatement extends AuthenticationStatement
     public String toString()
     {
         return ToStringBuilder.reflectionToString(this, ToStringStyle.SHORT_PREFIX_STYLE);
+    }
+    @Override
+    public AuditLogContext getAuditLogContext()
+    {
+        return new AuditLogContext(AuditLogEntryType.CREATE_ROLE);
     }
 }

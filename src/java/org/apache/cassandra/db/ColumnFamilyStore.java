@@ -30,6 +30,7 @@ import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.regex.Pattern;
+import javax.annotation.Nullable;
 import javax.management.*;
 import javax.management.openmbean.*;
 
@@ -70,15 +71,18 @@ import org.apache.cassandra.io.FSWriteError;
 import org.apache.cassandra.io.sstable.Component;
 import org.apache.cassandra.io.sstable.CorruptSSTableException;
 import org.apache.cassandra.io.sstable.Descriptor;
+import org.apache.cassandra.io.sstable.KeyIterator;
 import org.apache.cassandra.io.sstable.SSTableMultiWriter;
 import org.apache.cassandra.io.sstable.format.*;
 import org.apache.cassandra.io.sstable.metadata.MetadataCollector;
 import org.apache.cassandra.io.util.FileUtils;
+import org.apache.cassandra.io.util.RandomAccessReader;
 import org.apache.cassandra.metrics.TableMetrics;
 import org.apache.cassandra.metrics.TableMetrics.Sampler;
 import org.apache.cassandra.repair.TableRepairManager;
 import org.apache.cassandra.schema.*;
 import org.apache.cassandra.schema.CompactionParams.TombstoneOption;
+import org.apache.cassandra.service.ActiveRepairService;
 import org.apache.cassandra.service.CacheService;
 import org.apache.cassandra.service.StorageService;
 import org.apache.cassandra.streaming.TableStreamManager;
@@ -220,6 +224,8 @@ public class ColumnFamilyStore implements ColumnFamilyStoreMBean
     private final CassandraStreamManager streamManager;
 
     private final TableRepairManager repairManager;
+
+    private final SSTableImporter sstableImporter;
 
     private volatile boolean compactionSpaceCheck = true;
 
@@ -454,6 +460,7 @@ public class ColumnFamilyStore implements ColumnFamilyStoreMBean
         writeHandler = new CassandraTableWriteHandler(this);
         streamManager = new CassandraStreamManager(this);
         repairManager = new CassandraTableRepairManager(this);
+        sstableImporter = new SSTableImporter(this);
     }
 
     public void updateSpeculationThreshold()
@@ -682,7 +689,7 @@ public class ColumnFamilyStore implements ColumnFamilyStoreMBean
     }
 
     /**
-     * See #{@code StorageService.loadNewSSTables(String, String)} for more info
+     * See #{@code StorageService.importNewSSTables} for more info
      *
      * @param ksName The keyspace name
      * @param cfName The columnFamily name
@@ -694,95 +701,46 @@ public class ColumnFamilyStore implements ColumnFamilyStoreMBean
         keyspace.getColumnFamilyStore(cfName).loadNewSSTables();
     }
 
+    @Deprecated
+    public void loadNewSSTables()
+    {
+
+        SSTableImporter.Options options = SSTableImporter.Options.options().resetLevel(true).build();
+        sstableImporter.importNewSSTables(options);
+    }
+
     /**
      * #{@inheritDoc}
      */
-    public synchronized void loadNewSSTables()
+    public synchronized List<String> importNewSSTables(Set<String> srcPaths, boolean resetLevel, boolean clearRepaired, boolean verifySSTables, boolean verifyTokens, boolean invalidateCaches, boolean extendedVerify)
     {
-        logger.info("Loading new SSTables for {}/{}...", keyspace.getName(), name);
+        SSTableImporter.Options options = SSTableImporter.Options.options(srcPaths)
+                                                                 .resetLevel(resetLevel)
+                                                                 .clearRepaired(clearRepaired)
+                                                                 .verifySSTables(verifySSTables)
+                                                                 .verifyTokens(verifyTokens)
+                                                                 .invalidateCaches(invalidateCaches)
+                                                                 .extendedVerify(extendedVerify).build();
 
-        Set<Descriptor> currentDescriptors = new HashSet<>();
-        for (SSTableReader sstable : getSSTables(SSTableSet.CANONICAL))
-            currentDescriptors.add(sstable.descriptor);
-        Set<SSTableReader> newSSTables = new HashSet<>();
+        return sstableImporter.importNewSSTables(options);
+    }
 
-        Directories.SSTableLister lister = getDirectories().sstableLister(Directories.OnTxnErr.IGNORE).skipTemporary(true);
-        for (Map.Entry<Descriptor, Set<Component>> entry : lister.list().entrySet())
+    Descriptor getUniqueDescriptorFor(Descriptor descriptor, File targetDirectory)
+    {
+        Descriptor newDescriptor;
+        do
         {
-            Descriptor descriptor = entry.getKey();
-
-            if (currentDescriptors.contains(descriptor))
-                continue; // old (initialized) SSTable found, skipping
-
-            if (!descriptor.isCompatible())
-                throw new RuntimeException(String.format("Can't open incompatible SSTable! Current version %s, found file: %s",
-                        descriptor.getFormat().getLatestVersion(),
-                        descriptor));
-
-            // force foreign sstables to level 0
-            try
-            {
-                if (new File(descriptor.filenameFor(Component.STATS)).exists())
-                    descriptor.getMetadataSerializer().mutateLevel(descriptor, 0);
-            }
-            catch (IOException e)
-            {
-                FileUtils.handleCorruptSSTable(new CorruptSSTableException(e, entry.getKey().filenameFor(Component.STATS)));
-                logger.error("Cannot read sstable {}; other IO error, skipping table", entry, e);
-                continue;
-            }
-
-            // Increment the generation until we find a filename that doesn't exist. This is needed because the new
-            // SSTables that are being loaded might already use these generation numbers.
-            Descriptor newDescriptor;
-            do
-            {
-                newDescriptor = new Descriptor(descriptor.version,
-                                               descriptor.directory,
-                                               descriptor.ksname,
-                                               descriptor.cfname,
-                                               fileIndexGenerator.incrementAndGet(),
-                                               descriptor.formatType);
-            }
-            while (new File(newDescriptor.filenameFor(Component.DATA)).exists());
-
-            logger.info("Renaming new SSTable {} to {}", descriptor, newDescriptor);
-            SSTableWriter.rename(descriptor, newDescriptor, entry.getValue());
-
-            SSTableReader reader;
-            try
-            {
-                reader = SSTableReader.open(newDescriptor, entry.getValue(), metadata);
-            }
-            catch (CorruptSSTableException ex)
-            {
-                FileUtils.handleCorruptSSTable(ex);
-                logger.error("Corrupt sstable {}; skipping table", entry, ex);
-                continue;
-            }
-            catch (FSError ex)
-            {
-                FileUtils.handleFSError(ex);
-                logger.error("Cannot read sstable {}; file system error, skipping table", entry, ex);
-                continue;
-            }
-            newSSTables.add(reader);
+            newDescriptor = new Descriptor(descriptor.version,
+                                           targetDirectory,
+                                           descriptor.ksname,
+                                           descriptor.cfname,
+                                           // Increment the generation until we find a filename that doesn't exist. This is needed because the new
+                                           // SSTables that are being loaded might already use these generation numbers.
+                                           fileIndexGenerator.incrementAndGet(),
+                                           descriptor.formatType);
         }
-
-        if (newSSTables.isEmpty())
-        {
-            logger.info("No new SSTables were found for {}/{}", keyspace.getName(), name);
-            return;
-        }
-
-        logger.info("Loading new SSTables and building secondary indexes for {}/{}: {}", keyspace.getName(), name, newSSTables);
-
-        try (Refs<SSTableReader> refs = Refs.ref(newSSTables))
-        {
-            data.addSSTables(newSSTables);
-        }
-
-        logger.info("Done loading load new SSTables for {}/{}", keyspace.getName(), name);
+        while (new File(newDescriptor.filenameFor(Component.DATA)).exists());
+        return newDescriptor;
     }
 
     public void rebuildSecondaryIndex(String idxName)
@@ -1852,7 +1810,8 @@ public class ColumnFamilyStore implements ColumnFamilyStoreMBean
                 ephemeralSnapshotMarker.getParentFile().mkdirs();
 
             Files.createFile(ephemeralSnapshotMarker.toPath());
-            logger.trace("Created ephemeral snapshot marker file on {}.", ephemeralSnapshotMarker.getAbsolutePath());
+            if (logger.isTraceEnabled())
+                logger.trace("Created ephemeral snapshot marker file on {}.", ephemeralSnapshotMarker.getAbsolutePath());
         }
         catch (IOException e)
         {

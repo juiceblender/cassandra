@@ -27,6 +27,7 @@ import com.google.common.collect.Sets;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import org.apache.cassandra.audit.AuditLogEntryType;
 import org.apache.cassandra.auth.Permission;
 import org.apache.cassandra.config.DatabaseDescriptor;
 import org.apache.cassandra.cql3.*;
@@ -150,6 +151,8 @@ public class CreateViewStatement extends SchemaAlteringStatement
 
         TableMetadata metadata = Schema.instance.validateTable(baseName.getKeyspace(), baseName.getColumnFamily());
 
+        if (metadata.isVirtual())
+            throw new InvalidRequestException("Materialized views are not supported on virtual tables");
         if (metadata.isCounter())
             throw new InvalidRequestException("Materialized views are not supported on counter tables");
         if (metadata.isView())
@@ -316,7 +319,7 @@ public class CreateViewStatement extends SchemaAlteringStatement
 
         TableMetadata.Builder builder =
             TableMetadata.builder(keyspace(), columnFamily(), properties.properties.getId())
-                         .isView(true)
+                         .kind(TableMetadata.Kind.VIEW)
                          .params(params);
 
         add(metadata, targetPartitionKeys, builder::addPartitionKeyColumn);
@@ -378,5 +381,10 @@ public class CreateViewStatement extends SchemaAlteringStatement
     public String toString()
     {
         return ToStringBuilder.reflectionToString(this, ToStringStyle.SHORT_PREFIX_STYLE);
+    }
+    @Override
+    public AuditLogContext getAuditLogContext()
+    {
+        return new AuditLogContext(AuditLogEntryType.CREATE_VIEW, keyspace(), cfName.getColumnFamily());
     }
 }

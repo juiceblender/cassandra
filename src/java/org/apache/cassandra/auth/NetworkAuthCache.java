@@ -15,9 +15,24 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package org.apache.cassandra.service.reads;
 
-public enum ReadRepairDecision
+package org.apache.cassandra.auth;
+
+import org.apache.cassandra.config.DatabaseDescriptor;
+
+public class NetworkAuthCache extends AuthCache<RoleResource, DCPermissions> implements AuthCacheMBean
 {
-    NONE, GLOBAL, DC_LOCAL;
+    public NetworkAuthCache(INetworkAuthorizer authorizer)
+    {
+        super("NetworkAuthCache",
+              DatabaseDescriptor::setRolesValidity,
+              DatabaseDescriptor::getRolesValidity,
+              DatabaseDescriptor::setRolesUpdateInterval,
+              DatabaseDescriptor::getRolesUpdateInterval,
+              DatabaseDescriptor::setRolesCacheMaxEntries,
+              DatabaseDescriptor::getRolesCacheMaxEntries,
+              authorizer::authorize,
+              () -> DatabaseDescriptor.getAuthenticator().requireAuthentication());
+    }
+
 }

@@ -515,7 +515,8 @@ public class Memtable implements Comparable<Memtable>
 
         private void writeSortedContents()
         {
-            logger.debug("Writing {}, flushed range = ({}, {}]", Memtable.this.toString(), from, to);
+            if (logger.isDebugEnabled())
+                logger.debug("Writing {}, flushed range = ({}, {}]", Memtable.this.toString(), from, to);
 
             boolean trackContention = logger.isTraceEnabled();
             int heavilyContendedRowCount = 0;
@@ -544,10 +545,11 @@ public class Memtable implements Comparable<Memtable>
             }
 
             long bytesFlushed = writer.getFilePointer();
-            logger.debug("Completed flushing {} ({}) for commitlog position {}",
-                                                                              writer.getFilename(),
-                                                                              FBUtilities.prettyPrintMemory(bytesFlushed),
-                                                                              commitLogUpperBound);
+            if (logger.isDebugEnabled())
+                logger.debug("Completed flushing {} ({}) for commitlog position {}",
+                             writer.getFilename(),
+                             FBUtilities.prettyPrintMemory(bytesFlushed),
+                             commitLogUpperBound);
             // Update the metrics
             cfs.metric.bytesFlushed.inc(bytesFlushed);
 

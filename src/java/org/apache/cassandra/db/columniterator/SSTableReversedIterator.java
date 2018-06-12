@@ -223,6 +223,7 @@ public class SSTableReversedIterator extends AbstractSSTableIterator
                    && !stopReadingDisk())
             {
                 Unfiltered unfiltered = deserializer.readNext();
+                UnfilteredValidation.maybeValidateUnfiltered(unfiltered, metadata(), key, sstable);
                 // We may get empty row for the same reason expressed on UnfilteredSerializer.deserializeOne.
                 if (!unfiltered.isEmpty())
                     buffer.add(unfiltered);
@@ -401,7 +402,7 @@ public class SSTableReversedIterator extends AbstractSSTableIterator
         public void reset()
         {
             built = null;
-            rowBuilder = BTree.builder(metadata.comparator);
+            rowBuilder.reuse();
             deletionBuilder = MutableDeletionInfo.builder(partitionLevelDeletion, metadata().comparator, false);
         }
 

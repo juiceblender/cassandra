@@ -89,6 +89,7 @@ import org.apache.cassandra.streaming.management.StreamStateCompositeData;
 
 import com.google.common.base.Function;
 import com.google.common.base.Strings;
+import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.Iterables;
 import com.google.common.collect.Maps;
 import com.google.common.collect.Multimap;
@@ -418,21 +419,27 @@ public class NodeProbe implements AutoCloseable
             }
         }
     }
+    public Map<String, Map<String, CompositeData>> getPartitionSample(int capacity, int duration, int count, List<String> samplers) throws OpenDataException
+    {
+        return ssProxy.samplePartitions(duration, capacity, count, samplers);
+    }
 
-    public Map<Sampler, CompositeData> getPartitionSample(String ks, String cf, int capacity, int duration, int count, List<Sampler> samplers) throws OpenDataException
+    public Map<String, Map<String, CompositeData>> getPartitionSample(String ks, String cf, int capacity, int duration, int count, List<String> samplers) throws OpenDataException
     {
         ColumnFamilyStoreMBean cfsProxy = getCfsProxy(ks, cf);
-        for(Sampler sampler : samplers)
+        for(String sampler : samplers)
         {
-            cfsProxy.beginLocalSampling(sampler.name(), capacity);
+            cfsProxy.beginLocalSampling(sampler, capacity);
         }
         Uninterruptibles.sleepUninterruptibly(duration, TimeUnit.MILLISECONDS);
-        Map<Sampler, CompositeData> result = Maps.newHashMap();
-        for(Sampler sampler : samplers)
+        Map<String, CompositeData> result = Maps.newHashMap();
+        for(String sampler : samplers)
         {
-            result.put(sampler, cfsProxy.finishLocalSampling(sampler.name(), count));
+            result.put(sampler, cfsProxy.finishLocalSampling(sampler, count));
         }
-        return result;
+        return new ImmutableMap.Builder<String, Map<String, CompositeData>>()
+                .put(ks + "." + cf, result)
+                .build();
     }
 
     public void invalidateCounterCache()
@@ -1169,9 +1176,15 @@ public class NodeProbe implements AutoCloseable
         return msProxy.getDroppedMessages();
     }
 
+    @Deprecated
     public void loadNewSSTables(String ksName, String cfName)
     {
         ssProxy.loadNewSSTables(ksName, cfName);
+    }
+
+    public List<String> importNewSSTables(String ksName, String cfName, Set<String> srcPaths, boolean resetLevel, boolean clearRepaired, boolean verifySSTables, boolean verifyTokens, boolean invalidateCaches, boolean extendedVerify)
+    {
+        return getCfsProxy(ksName, cfName).importNewSSTables(srcPaths, resetLevel, clearRepaired, verifySSTables, verifyTokens, invalidateCaches, extendedVerify);
     }
 
     public void rebuildIndex(String ksName, String cfName, String... idxNames)
@@ -1393,6 +1406,7 @@ public class NodeProbe implements AutoCloseable
                 case "EstimatedPartitionCount":
                 case "KeyCacheHitRate":
                 case "LiveSSTableCount":
+                case "OldVersionSSTableCount":
                 case "MaxPartitionSize":
                 case "MeanPartitionSize":
                 case "MemtableColumnsCount":
@@ -1514,6 +1528,7 @@ public class NodeProbe implements AutoCloseable
                 case "connections": // List<Map<String,String>> - list of all native connections and their properties
                 case "connectedNativeClients": // number of connected native clients
                 case "connectedNativeClientsByUser": // number of native clients by username
+                case "clientsByProtocolVersion": // number of native clients by username
                     return JMX.newMBeanProxy(mbeanServerConn,
                             new ObjectName("org.apache.cassandra.metrics:type=Client,name=" + metricName),
                             CassandraMetricsRegistry.JmxGaugeMBean.class).getValue();
@@ -1661,6 +1676,21 @@ public class NodeProbe implements AutoCloseable
     public void reloadSslCerts()
     {
         msProxy.reloadSslCertificates();
+    }
+
+    public void clearConnectionHistory()
+    {
+        ssProxy.clearConnectionHistory();
+    }
+    
+    public void disableAuditLog()
+    {
+        ssProxy.disableAuditLog();
+    }
+
+    public void enableAuditLog(String loggerName, String includedKeyspaces ,String excludedKeyspaces ,String includedCategories ,String excludedCategories ,String includedUsers ,String excludedUsers)
+    {
+        ssProxy.enableAuditLog(loggerName, includedKeyspaces, excludedKeyspaces, includedCategories, excludedCategories, includedUsers, excludedUsers);
     }
 }
 

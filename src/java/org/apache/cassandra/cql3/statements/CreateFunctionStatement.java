@@ -21,8 +21,10 @@ import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
 
+import org.apache.cassandra.audit.AuditLogEntryType;
 import org.apache.cassandra.auth.*;
 import org.apache.cassandra.config.DatabaseDescriptor;
+import org.apache.cassandra.schema.KeyspaceMetadata;
 import org.apache.cassandra.schema.Schema;
 import org.apache.cassandra.cql3.CQL3Type;
 import org.apache.cassandra.cql3.ColumnIdentifier;
@@ -135,8 +137,11 @@ public final class CreateFunctionStatement extends SchemaAlteringStatement
         if (ifNotExists && orReplace)
             throw new InvalidRequestException("Cannot use both 'OR REPLACE' and 'IF NOT EXISTS' directives");
 
-        if (Schema.instance.getKeyspaceMetadata(functionName.keyspace) == null)
+        KeyspaceMetadata ksm = Schema.instance.getKeyspaceMetadata(functionName.keyspace);
+        if (null == ksm)
             throw new InvalidRequestException(String.format("Cannot add function '%s' to non existing keyspace '%s'.", functionName.name, functionName.keyspace));
+        if (ksm.isVirtual())
+            throw new InvalidRequestException("Cannot create functions in virtual keyspaces");
     }
 
     public Event.SchemaChange announceMigration(QueryState queryState, boolean isLocalOnly) throws RequestValidationException
@@ -187,5 +192,11 @@ public final class CreateFunctionStatement extends SchemaAlteringStatement
     public String toString()
     {
         return ToStringBuilder.reflectionToString(this, ToStringStyle.SHORT_PREFIX_STYLE);
+    }
+
+    @Override
+    public AuditLogContext getAuditLogContext()
+    {
+        return new AuditLogContext(AuditLogEntryType.CREATE_FUNCTION, functionName.keyspace, functionName.name);
     }
 }

@@ -25,10 +25,7 @@ import java.net.InetAddress;
 import java.net.URL;
 import java.net.UnknownHostException;
 import java.util.List;
-import java.util.Map;
-import java.util.Set;
 import java.util.concurrent.TimeUnit;
-import java.util.stream.Collectors;
 import javax.management.MBeanServer;
 import javax.management.ObjectName;
 import javax.management.StandardMBean;
@@ -49,6 +46,9 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import org.apache.cassandra.concurrent.ScheduledExecutors;
+import org.apache.cassandra.db.virtual.SystemViewsKeyspace;
+import org.apache.cassandra.db.virtual.VirtualKeyspaceRegistry;
+import org.apache.cassandra.db.virtual.VirtualSchemaKeyspace;
 import org.apache.cassandra.locator.InetAddressAndPort;
 import org.apache.cassandra.net.StartupClusterConnectivityChecker;
 import org.apache.cassandra.schema.TableMetadata;
@@ -252,6 +252,8 @@ public class CassandraDaemon
             throw e;
         }
 
+        VirtualKeyspaceRegistry.instance.register(VirtualSchemaKeyspace.instance);
+        VirtualKeyspaceRegistry.instance.register(SystemViewsKeyspace.instance);
 
         // clean up debris in the rest of the keyspaces
         for (String keyspaceName : Schema.instance.getKeyspaces())
@@ -503,11 +505,9 @@ public class CassandraDaemon
      */
     public void start()
     {
-        StartupClusterConnectivityChecker connectivityChecker = new StartupClusterConnectivityChecker(DatabaseDescriptor.getBlockForPeersPercentage(),
-                                                                                                      DatabaseDescriptor.getBlockForPeersTimeoutInSeconds(),
-                                                                                                      Gossiper.instance::isAlive);
-        Set<InetAddressAndPort> peers = Gossiper.instance.getEndpointStates().stream().map(Map.Entry::getKey).collect(Collectors.toSet());
-        connectivityChecker.execute(peers);
+        StartupClusterConnectivityChecker connectivityChecker = StartupClusterConnectivityChecker.create(DatabaseDescriptor.getBlockForPeersPercentage(),
+                                                                                                         DatabaseDescriptor.getBlockForPeersTimeoutInSeconds());
+        connectivityChecker.execute(Gossiper.instance.getEndpoints());
 
         String nativeFlag = System.getProperty("cassandra.start_native_transport");
         if ((nativeFlag != null && Boolean.parseBoolean(nativeFlag)) || (nativeFlag == null && DatabaseDescriptor.startNativeTransport()))
@@ -679,6 +679,11 @@ public class CassandraDaemon
         instance.activate();
     }
 
+    public void clearConnectionHistory()
+    {
+        nativeTransportService.clearConnectionHistory();
+    }
+
     private void exitOrFail(int code, String message)
     {
         exitOrFail(code, message, null);
@@ -731,5 +736,7 @@ public class CassandraDaemon
          * Returns whether the server is currently running.
          */
         public boolean isRunning();
+
+        public void clearConnectionHistory();
     }
 }

@@ -26,6 +26,7 @@ import com.google.common.collect.Sets;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import org.apache.cassandra.audit.AuditLogEntryType;
 import org.apache.cassandra.auth.Permission;
 import org.apache.cassandra.cql3.CFName;
 import org.apache.cassandra.cql3.ColumnIdentifier;
@@ -80,6 +81,9 @@ public class CreateIndexStatement extends SchemaAlteringStatement
     public void validate(ClientState state) throws RequestValidationException
     {
         TableMetadata table = Schema.instance.validateTable(keyspace(), columnFamily());
+
+        if (table.isVirtual())
+            throw new InvalidRequestException("Secondary indexes are not supported on virtual tables");
 
         if (table.isCounter())
             throw new InvalidRequestException("Secondary indexes are not supported on counter tables");
@@ -262,5 +266,10 @@ public class CreateIndexStatement extends SchemaAlteringStatement
     public String toString()
     {
         return ToStringBuilder.reflectionToString(this, ToStringStyle.SHORT_PREFIX_STYLE);
+    }
+    @Override
+    public AuditLogContext getAuditLogContext()
+    {
+        return new AuditLogContext(AuditLogEntryType.CREATE_INDEX, keyspace(), indexName);
     }
 }

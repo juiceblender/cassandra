@@ -327,6 +327,8 @@ public class Keyspace
     {
         metadata = Schema.instance.getKeyspaceMetadata(keyspaceName);
         assert metadata != null : "Unknown keyspace " + keyspaceName;
+        if (metadata.isVirtual())
+            throw new IllegalStateException("Cannot initialize Keyspace with virtual metadata " + keyspaceName);
         createReplicationStrategy(metadata);
 
         this.metric = new KeyspaceMetrics(this);
@@ -552,7 +554,8 @@ public class Keyspace
                             for (int j = 0; j < i; j++)
                                 locks[j].unlock();
 
-                            logger.trace("Could not acquire lock for {} and table {}", ByteBufferUtil.bytesToHex(mutation.key().getKey()), columnFamilyStores.get(tableId).name);
+                            if (logger.isTraceEnabled())
+                                logger.trace("Could not acquire lock for {} and table {}", ByteBufferUtil.bytesToHex(mutation.key().getKey()), columnFamilyStores.get(tableId).name);
                             Tracing.trace("Could not acquire MV lock");
                             if (future != null)
                             {

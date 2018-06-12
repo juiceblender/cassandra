@@ -19,6 +19,7 @@ package org.apache.cassandra.cql3.statements;
 
 import java.util.List;
 
+import org.apache.cassandra.audit.AuditLogEntryType;
 import org.apache.cassandra.cql3.*;
 import org.apache.cassandra.cql3.conditions.ColumnCondition;
 import org.apache.cassandra.cql3.conditions.Conditions;
@@ -143,6 +144,8 @@ public class DeleteStatement extends ModificationStatement
                                                         Conditions conditions,
                                                         Attributes attrs)
         {
+            checkFalse(metadata.isVirtual(), "Virtual tables don't support DELETE statements");
+
             Operations operations = new Operations(type);
 
             for (Operation.RawDeletion deletion : deletions)
@@ -190,5 +193,10 @@ public class DeleteStatement extends ModificationStatement
     public String toString()
     {
         return ToStringBuilder.reflectionToString(this, ToStringStyle.SHORT_PREFIX_STYLE);
+    }
+    @Override
+    public AuditLogContext getAuditLogContext()
+    {
+        return new AuditLogContext(AuditLogEntryType.DELETE, keyspace(), columnFamily());
     }
 }
